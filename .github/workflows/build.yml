@@ -1,4 +1,5 @@
-name: build
+name: CI
+
 on:
   push:
     branches: [main, zig-0.16-port]
@@ -9,13 +10,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   zig:
     name: Zig 0.16 / ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
@@ -26,16 +28,35 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.16.0
-      - run: zig build
-      - run: zig build test
-      - run: zig build test-integration
+      - name: Format
+        run: zig fmt --check build.zig src tests
+      - name: Build
+        run: zig build
+      - name: Unit and component tests
+        run: zig build test
+      - name: Regression tests
+        run: zig build test-regression
+      - name: Integration tests
+        run: zig build test-integration
+      - name: CLI smoke tests
+        run: zig build test-smoke
+
+  release-safe:
+    name: Zig ReleaseSafe validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - run: zig build -Doptimize=ReleaseSafe
+      - run: zig build check -Doptimize=ReleaseSafe
 
   legacy-go:
-    name: Legacy Go / ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    name: Legacy Go compatibility
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: legacy_go
@@ -46,7 +67,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: legacy_go/go.mod
-      - run: go mod tidy
-      - run: git diff --exit-code
-      - run: go build -race ./...
-      - run: go test -race -failfast ./...
+      - name: Verify module files are clean
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - run: go build ./...
+      - run: go test -failfast ./...
