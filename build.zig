@@ -35,7 +35,8 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run MyChappie Glamouros Coder CLI");
     run_step.dependOn(&run_cmd.step);
 
-    // Test steps
+    // Deterministic/default tests. The autonomous agent loop is intentionally
+    // excluded and lives under the explicit test-integration step below.
     const mod_tests = b.addTest(.{
         .root_module = mod,
     });
@@ -46,7 +47,24 @@ pub fn build(b: *std.Build) void {
     });
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
-    const test_step = b.step("test", "Run all MyChappie Glamouros Coder tests");
+    const test_step = b.step("test", "Run MyChappie unit and component tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    // Explicit integration test: exercises the autonomous loop and a real
+    // filesystem write, then cleans the generated artifact.
+    const integration_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/agent_integration.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "mychappie_coder", .module = mod },
+            },
+        }),
+    });
+    const run_integration_tests = b.addRunArtifact(integration_tests);
+
+    const integration_step = b.step("test-integration", "Run autonomous agent integration tests");
+    integration_step.dependOn(&run_integration_tests.step);
 }
