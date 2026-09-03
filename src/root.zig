@@ -22,6 +22,7 @@ pub const tools = struct {
 
 pub const llm = struct {
     pub const provider = @import("llm/provider.zig");
+    pub const http = @import("llm/http.zig");
     pub const client = @import("llm/client.zig");
     pub const Client = client.Client;
     pub const mock = @import("llm/mock.zig");
@@ -65,8 +66,13 @@ test {
     _ = @import("tools/question.zig");
     _ = @import("tools/registry.zig");
     _ = @import("llm/provider.zig");
+    _ = @import("llm/http.zig");
     _ = @import("llm/client.zig");
     _ = @import("llm/mock.zig");
+    _ = @import("llm/gemini.zig");
+    _ = @import("llm/openai.zig");
+    _ = @import("llm/anthropic.zig");
+    _ = @import("llm/ollama.zig");
     _ = @import("agent/session.zig");
     _ = @import("agent/prompts.zig");
     _ = @import("agent/coordinator.zig");
