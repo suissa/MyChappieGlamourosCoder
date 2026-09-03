@@ -11,7 +11,8 @@ test "config remains deterministic when process environment is not injected" {
 
 test "unknown tools fail closed" {
     const allocator = std.testing.allocator;
-    const registry = mychappie.tools.ToolRegistry.init();
+    var registry = mychappie.tools.ToolRegistry.init();
+    defer registry.deinit(allocator);
 
     var result = try registry.execute(allocator, std.testing.io, "does-not-exist", "{}");
     defer result.deinit(allocator);
@@ -19,6 +20,28 @@ test "unknown tools fail closed" {
     try std.testing.expect(!result.success);
     try std.testing.expect(result.error_message != null);
     try std.testing.expect(std.mem.indexOf(u8, result.error_message.?, "not found") != null);
+}
+
+test "todo state is owned and isolated per agent" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var first = try mychappie.agent.CoderAgent.init(allocator, ".", .{});
+    defer first.deinit(allocator);
+    var second = try mychappie.agent.CoderAgent.init(allocator, ".", .{});
+    defer second.deinit(allocator);
+
+    var add = try first.registry.execute(allocator, io, "todos", "{\"action\":\"add\",\"task\":\"only-first-agent\"}");
+    defer add.deinit(allocator);
+    try std.testing.expect(add.success);
+
+    var first_list = try first.registry.execute(allocator, io, "todos", "{\"action\":\"list\"}");
+    defer first_list.deinit(allocator);
+    try std.testing.expect(std.mem.indexOf(u8, first_list.output, "only-first-agent") != null);
+
+    var second_list = try second.registry.execute(allocator, io, "todos", "{\"action\":\"list\"}");
+    defer second_list.deinit(allocator);
+    try std.testing.expectEqualStrings("No tasks in the plan.", second_list.output);
 }
 
 test "dangerous shell tool is denied by default" {

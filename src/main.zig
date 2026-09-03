@@ -5,8 +5,6 @@ const Glamour = mychappie.Glamour;
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
-
-    // Parse command line arguments via init.minimal.args
     const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     if (args.len < 2) {
@@ -30,13 +28,14 @@ pub fn main(init: std.process.Init) !void {
         Glamour.printBanner();
         std.debug.print("{s}📦 FERRAMENTAS DO AGENTE DISPONÍVEIS:{s}\n\n", .{ Glamour.Theme.yellow, Glamour.Theme.reset });
 
-        const reg = mychappie.tools.ToolRegistry.init();
-        for (reg.tools) |t| {
+        var registry = mychappie.tools.ToolRegistry.init();
+        defer registry.deinit(allocator);
+        for (registry.tools) |tool| {
             std.debug.print("  {s}⚡ {s:<12}{s} {s}\n", .{
                 Glamour.Theme.cyan,
-                t.name,
+                tool.name,
                 Glamour.Theme.reset,
-                t.description,
+                tool.description,
             });
         }
         std.debug.print("\n", .{});
@@ -66,29 +65,20 @@ pub fn main(init: std.process.Init) !void {
     }
 
     if (std.mem.eql(u8, command, "run")) {
-        if (args.len < 3) {
-            std.debug.print("{s}Erro:{s} Por favor forneça o prompt para execução. Exemplo: mychappie-coder run \"Crie um arquivo teste.txt\"\n", .{ Glamour.Theme.red, Glamour.Theme.reset });
+        var skip_permissions = false;
+        var prompt_index: usize = 2;
+
+        if (args.len > 2 and std.mem.eql(u8, args[2], "--dangerously-skip-permissions")) {
+            skip_permissions = true;
+            prompt_index = 3;
+        }
+
+        if (args.len <= prompt_index) {
+            std.debug.print("{s}Erro:{s} Forneça um prompt. Exemplo: mychappie-coder run \"Crie um arquivo teste.txt\"\n", .{ Glamour.Theme.red, Glamour.Theme.reset });
             return;
         }
 
-        const prompt = args[2];
-        Glamour.printBanner();
-
-        std.debug.print("{s}🎯 OBJETIVO:{s} {s}\n\n", .{ Glamour.Theme.yellow, Glamour.Theme.reset, prompt });
-
-        var coder = try mychappie.agent.CoderAgent.init(allocator, ".", .{
-            .max_steps = 10,
-            .model = "mock-chappie-v1",
-            .dangerously_skip_permissions = true,
-        });
-        defer coder.deinit(allocator);
-
-        const result = try coder.executeTurn(allocator, io, prompt);
-        defer allocator.free(result);
-
-        std.debug.print("\n", .{});
-        try Glamour.printBox(allocator, "RESPOSTA DO AGENTE", result, Glamour.Theme.green);
-        std.debug.print("\n", .{});
+        try runAgent(allocator, io, args[prompt_index], skip_permissions);
         return;
     }
 
@@ -98,15 +88,23 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    // Default: treat arguments as prompt to run
+    // Direct prompts are safe by default. Dangerous tools require the explicit run flag.
+    try runAgent(allocator, io, command, false);
+}
+
+fn runAgent(allocator: std.mem.Allocator, io: std.Io, prompt: []const u8, skip_permissions: bool) !void {
     Glamour.printBanner();
-    const prompt = args[1];
-    std.debug.print("{s}🎯 OBJETIVO:{s} {s}\n\n", .{ Glamour.Theme.yellow, Glamour.Theme.reset, prompt });
+    std.debug.print("{s}🎯 OBJETIVO:{s} {s}\n", .{ Glamour.Theme.yellow, Glamour.Theme.reset, prompt });
+    std.debug.print("{s}🔐 PERMISSÕES:{s} {s}\n\n", .{
+        Glamour.Theme.cyan,
+        Glamour.Theme.reset,
+        if (skip_permissions) "BYPASS EXPLÍCITO (dangerous tools habilitadas)" else "SAFE DEFAULT (dangerous tools bloqueadas)",
+    });
 
     var coder = try mychappie.agent.CoderAgent.init(allocator, ".", .{
         .max_steps = 10,
         .model = "mock-chappie-v1",
-        .dangerously_skip_permissions = true,
+        .dangerously_skip_permissions = skip_permissions,
     });
     defer coder.deinit(allocator);
 
@@ -122,10 +120,11 @@ fn printHelp() void {
     std.debug.print("{s}USO:{s}\n", .{ Glamour.Theme.bold, Glamour.Theme.reset });
     std.debug.print("  mychappie-coder <comando> [argumentos]\n\n", .{});
     std.debug.print("{s}COMANDOS:{s}\n", .{ Glamour.Theme.bold, Glamour.Theme.reset });
-    std.debug.print("  {s}run <prompt>{s}     Executa o loop autônomo do agente com ferramentas\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
-    std.debug.print("  {s}tools{s}            Exibe o catálogo de ferramentas disponíveis\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
-    std.debug.print("  {s}models{s}           Exibe a lista de modelos e provedores suportados\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
-    std.debug.print("  {s}info{s}             Exibe diagnóstico do workspace e contexto AllasCode\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
-    std.debug.print("  {s}version{s}          Exibe informações de versão e compilação Zig v0.16\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
-    std.debug.print("  {s}help{s}             Exibe esta mensagem de ajuda\n\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+    std.debug.print("  {s}run <prompt>{s}                              Executa o agente com permissões seguras\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+    std.debug.print("  {s}run --dangerously-skip-permissions <prompt>{s} Habilita explicitamente tools perigosas\n", .{ Glamour.Theme.red, Glamour.Theme.reset });
+    std.debug.print("  {s}tools{s}                                     Exibe o catálogo de ferramentas disponíveis\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+    std.debug.print("  {s}models{s}                                    Exibe a lista de modelos e provedores suportados\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+    std.debug.print("  {s}info{s}                                      Exibe diagnóstico do workspace e contexto AllasCode\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+    std.debug.print("  {s}version{s}                                   Exibe informações de versão e compilação Zig v0.16\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+    std.debug.print("  {s}help{s}                                      Exibe esta mensagem de ajuda\n\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
 }
