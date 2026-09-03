@@ -67,9 +67,7 @@ pub const MockProvider = struct {
 
 test "mock provider step progression" {
     const allocator = std.testing.allocator;
-    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .{ .block = .global } });
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var mock = MockProvider.init();
     const user_msg = [_]prov.ChatMessage{
