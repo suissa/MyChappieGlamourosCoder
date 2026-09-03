@@ -10,12 +10,13 @@ const glamour = @import("../glamour.zig").Glamour;
 pub const AgentOptions = struct {
     max_steps: usize = 10,
     model: []const u8 = "mock-chappie-v1",
-    dangerously_skip_permissions: bool = true,
+    dangerously_skip_permissions: bool = false,
 };
 
 pub const CoderAgent = struct {
     coordinator: coord_mod.Coordinator,
     registry: reg_mod.ToolRegistry,
+    permissions: perm_mod.PermissionManager,
     session: session_mod.Session,
     mock_llm: mock_prov.MockProvider,
     options: AgentOptions,
@@ -25,6 +26,7 @@ pub const CoderAgent = struct {
         return .{
             .coordinator = coord_mod.Coordinator.init(.coder),
             .registry = reg_mod.ToolRegistry.init(),
+            .permissions = perm_mod.PermissionManager.init(options.dangerously_skip_permissions),
             .session = sess,
             .mock_llm = mock_prov.MockProvider.init(),
             .options = options,
@@ -63,11 +65,27 @@ pub const CoderAgent = struct {
                 last_response_text = try allocator.dupe(u8, text);
             }
 
-            // Check if tool calls were requested
             if (llm_response.tool_calls) |calls| {
                 if (calls.len > 0) {
                     for (calls) |call| {
                         glamour.printToolCall(call.name, call.arguments_json);
+
+                        if (!self.permissions.isAllowed(call.name)) {
+                            const denied = try std.fmt.allocPrint(
+                                allocator,
+                                "Permission denied: tool '{s}' is classified as dangerous. Set dangerously_skip_permissions=true only for an explicitly trusted execution context.",
+                                .{call.name},
+                            );
+                            defer allocator.free(denied);
+
+                            glamour.printToolResult(call.name, false, denied);
+                            try self.session.addMessage(allocator, .{
+                                .role = .tool,
+                                .content = denied,
+                                .tool_call_id = call.id,
+                            });
+                            continue;
+                        }
 
                         var tool_res = try self.registry.execute(allocator, io, call.name, call.arguments_json);
                         defer tool_res.deinit(allocator);
@@ -75,19 +93,16 @@ pub const CoderAgent = struct {
                         const preview = if (tool_res.output.len > 120) tool_res.output[0..120] else tool_res.output;
                         glamour.printToolResult(call.name, tool_res.success, preview);
 
-                        // Inject tool result into session
-                        const tool_result_msg = prov.ChatMessage{
+                        try self.session.addMessage(allocator, .{
                             .role = .tool,
-                            .content = tool_res.output,
+                            .content = if (tool_res.success) tool_res.output else (tool_res.error_message orelse tool_res.output),
                             .tool_call_id = call.id,
-                        };
-                        try self.session.addMessage(allocator, tool_result_msg);
+                        });
                     }
-                    continue; // Loop back for LLM to digest tool output
+                    continue;
                 }
             }
 
-            // No tool calls: LLM finished its turn
             if (llm_response.content) |final_text| {
                 try self.session.addTurn(allocator, .assistant, final_text);
             }
@@ -98,7 +113,7 @@ pub const CoderAgent = struct {
     }
 };
 
-test "coder agent initialization is side-effect free" {
+test "coder agent initialization is side-effect free and permissions are safe by default" {
     const allocator = std.testing.allocator;
 
     var agent = try CoderAgent.init(allocator, ".", .{ .max_steps = 5 });
@@ -107,4 +122,6 @@ test "coder agent initialization is side-effect free" {
     try std.testing.expectEqual(@as(usize, 5), agent.options.max_steps);
     try std.testing.expect(agent.registry.get("write") != null);
     try std.testing.expectEqual(@as(usize, 0), agent.mock_llm.step_count);
+    try std.testing.expect(!agent.permissions.skip_all);
+    try std.testing.expect(!agent.permissions.isAllowed("bash"));
 }
