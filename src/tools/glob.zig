@@ -47,12 +47,10 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
     defer out_list.deinit(allocator);
 
     var count: usize = 0;
-    // Simple matching: if pattern starts with "*.", match extension; else substring match
     const is_ext_pattern = std.mem.startsWith(u8, pattern, "*.");
     const ext_target = if (is_ext_pattern) pattern[1..] else "";
 
     while (try walker.next(io)) |entry| {
-        // Skip hidden and build dirs
         if (std.mem.indexOf(u8, entry.path, ".git") != null or
             std.mem.indexOf(u8, entry.path, "zig-cache") != null or
             std.mem.indexOf(u8, entry.path, "zig-out") != null or
@@ -98,7 +96,7 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
 pub const tool_def = Tool{
     .name = "glob",
     .description = "Find files and directories matching a wildcard or pattern (e.g. *.zig or filename substring).",
-    .parameters_json = 
+    .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
@@ -113,9 +111,7 @@ pub const tool_def = Tool{
 
 test "glob tool listing" {
     const allocator = std.testing.allocator;
-    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .{ .block = .global } });
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const cwd = std.Io.Dir.cwd();
     try cwd.writeFile(io, .{ .sub_path = "temp_glob_target.zig", .data = "const x = 1;" });
