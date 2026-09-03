@@ -6,7 +6,6 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
 
-    // Parse command line arguments via init.minimal.args
     const args = try init.minimal.args.toSlice(init.arena.allocator());
 
     if (args.len < 2) {
@@ -22,7 +21,7 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("  {s}Version:{s}   0.1.0-alpha (Zig v0.16.0 Native)\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
         std.debug.print("  {s}Plane:{s}     Agents / Coder Plane\n", .{ Glamour.Theme.purple, Glamour.Theme.reset });
         std.debug.print("  {s}Engine:{s}    SOTA-DD Autonomous Loop with Multi-Tool Pipeline\n", .{ Glamour.Theme.green, Glamour.Theme.reset });
-        std.debug.print("  {s}Runtime:{s}   std.Io.Threaded High-Performance Event Loop\n\n", .{ Glamour.Theme.slate, Glamour.Theme.reset });
+        std.debug.print("  {s}Runtime:{s}   explicit std.process.Init + std.Io\n\n", .{ Glamour.Theme.slate, Glamour.Theme.reset });
         return;
     }
 
@@ -46,11 +45,12 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, command, "models")) {
         Glamour.printBanner();
         std.debug.print("{s}🧠 PROVEDORES DE LLM SUPORTADOS:{s}\n\n", .{ Glamour.Theme.purple, Glamour.Theme.reset });
-        std.debug.print("  • {s}Google Gemini{s}       (gemini-2.5-pro, gemini-2.5-flash via GEMINI_API_KEY)\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
-        std.debug.print("  • {s}OpenAI / Compatible{s}   (gpt-4o, openrouter, deepseek via OPENAI_API_KEY)\n", .{ Glamour.Theme.green, Glamour.Theme.reset });
-        std.debug.print("  • {s}Anthropic Claude{s}     (claude-3-5-sonnet via ANTHROPIC_API_KEY)\n", .{ Glamour.Theme.orange, Glamour.Theme.reset });
-        std.debug.print("  • {s}Ollama Local{s}         (offline inference via OLLAMA_HOST, default: localhost:11434)\n", .{ Glamour.Theme.slate, Glamour.Theme.reset });
-        std.debug.print("  • {s}Deterministic Mock{s}   (offline verification and testing)\n\n", .{ Glamour.Theme.yellow, Glamour.Theme.reset });
+        std.debug.print("  • {s}Google Gemini{s}        via GEMINI_API_KEY\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+        std.debug.print("  • {s}OpenAI / Compatible{s}  via OPENAI_API_KEY + OPENAI_BASE_URL opcional\n", .{ Glamour.Theme.green, Glamour.Theme.reset });
+        std.debug.print("  • {s}Anthropic Claude{s}      via ANTHROPIC_API_KEY\n", .{ Glamour.Theme.orange, Glamour.Theme.reset });
+        std.debug.print("  • {s}Ollama Local{s}          via OLLAMA_HOST\n", .{ Glamour.Theme.slate, Glamour.Theme.reset });
+        std.debug.print("  • {s}Deterministic Mock{s}    offline verification and testing\n\n", .{ Glamour.Theme.yellow, Glamour.Theme.reset });
+        std.debug.print("  Override: MYCHAPPIE_PROVIDER / MYCHAPPIE_MODEL / MYCHAPPIE_BASE_URL\n\n", .{});
         return;
     }
 
@@ -61,7 +61,9 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("  - Workspace:        {s}\n", .{app_cfg.workspace_root});
         std.debug.print("  - AGENTS.md:        {s}\n", .{if (app_cfg.has_agents_md) "Encontrado ✔" else "Não encontrado (usando padrão)"});
         std.debug.print("  - Active Provider:  {s}\n", .{@tagName(app_cfg.provider_type)});
-        std.debug.print("  - Active Model:     {s}\n\n", .{app_cfg.model});
+        std.debug.print("  - Active Model:     {s}\n", .{app_cfg.model});
+        std.debug.print("  - Max Steps:        {d}\n", .{app_cfg.max_steps});
+        std.debug.print("  - Dangerous Tools:  {s}\n\n", .{if (app_cfg.dangerously_skip_permissions) "LIBERADAS por configuração" else "BLOQUEADAS por padrão"});
         return;
     }
 
@@ -71,24 +73,7 @@ pub fn main(init: std.process.Init) !void {
             return;
         }
 
-        const prompt = args[2];
-        Glamour.printBanner();
-
-        std.debug.print("{s}🎯 OBJETIVO:{s} {s}\n\n", .{ Glamour.Theme.yellow, Glamour.Theme.reset, prompt });
-
-        var coder = try mychappie.agent.CoderAgent.init(allocator, ".", .{
-            .max_steps = 10,
-            .model = "mock-chappie-v1",
-            .dangerously_skip_permissions = true,
-        });
-        defer coder.deinit(allocator);
-
-        const result = try coder.executeTurn(allocator, io, prompt);
-        defer allocator.free(result);
-
-        std.debug.print("\n", .{});
-        try Glamour.printBox(allocator, "RESPOSTA DO AGENTE", result, Glamour.Theme.green);
-        std.debug.print("\n", .{});
+        try runAgent(allocator, io, init.environ_map, args[2]);
         return;
     }
 
@@ -98,16 +83,26 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    // Default: treat arguments as prompt to run
+    try runAgent(allocator, io, init.environ_map, command);
+}
+
+fn runAgent(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ_map: *const std.process.Environ.Map,
+    prompt: []const u8,
+) !void {
     Glamour.printBanner();
-    const prompt = args[1];
     std.debug.print("{s}🎯 OBJETIVO:{s} {s}\n\n", .{ Glamour.Theme.yellow, Glamour.Theme.reset, prompt });
 
-    var coder = try mychappie.agent.CoderAgent.init(allocator, ".", .{
-        .max_steps = 10,
-        .model = "mock-chappie-v1",
-        .dangerously_skip_permissions = true,
-    });
+    const app_cfg = mychappie.AppConfig.load(io, ".", environ_map);
+    var coder = mychappie.agent.CoderAgent.initWithConfig(allocator, app_cfg) catch |err| {
+        std.debug.print(
+            "{s}Configuração inválida:{s} não foi possível iniciar o provider '{s}': {s}\n",
+            .{ Glamour.Theme.red, Glamour.Theme.reset, @tagName(app_cfg.provider_type), @errorName(err) },
+        );
+        return err;
+    };
     defer coder.deinit(allocator);
 
     const result = try coder.executeTurn(allocator, io, prompt);
@@ -124,8 +119,11 @@ fn printHelp() void {
     std.debug.print("{s}COMANDOS:{s}\n", .{ Glamour.Theme.bold, Glamour.Theme.reset });
     std.debug.print("  {s}run <prompt>{s}     Executa o loop autônomo do agente com ferramentas\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
     std.debug.print("  {s}tools{s}            Exibe o catálogo de ferramentas disponíveis\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
-    std.debug.print("  {s}models{s}           Exibe a lista de modelos e provedores suportados\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+    std.debug.print("  {s}models{s}           Exibe provedores e variáveis de configuração\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
     std.debug.print("  {s}info{s}             Exibe diagnóstico do workspace e contexto AllasCode\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
     std.debug.print("  {s}version{s}          Exibe informações de versão e compilação Zig v0.16\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
     std.debug.print("  {s}help{s}             Exibe esta mensagem de ajuda\n\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+    std.debug.print("{s}SEGURANÇA:{s}\n", .{ Glamour.Theme.bold, Glamour.Theme.reset });
+    std.debug.print("  Ferramentas perigosas (ex.: bash) ficam bloqueadas por padrão.\n", .{});
+    std.debug.print("  Use MYCHAPPIE_DANGEROUSLY_SKIP_PERMISSIONS=true somente quando intencional.\n\n", .{});
 }
