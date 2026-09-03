@@ -17,22 +17,22 @@ pub const OpenAIProvider = struct {
     }
 
     pub fn buildPayload(allocator: std.mem.Allocator, request: CompletionRequest) ![]u8 {
-        var payload: std.ArrayList(u8) = .empty;
-        errdefer payload.deinit(allocator);
+        var output: std.Io.Writer.Allocating = .init(allocator);
+        errdefer output.deinit();
+        const writer = &output.writer;
 
-        try payload.appendSlice(allocator, "{\"model\":");
-        try std.json.stringify(request.model, .{}, payload.writer(allocator));
-        try payload.appendSlice(allocator, ",\"messages\":[");
+        try writer.writeAll("{\"model\":");
+        try std.json.Stringify.value(request.model, .{}, writer);
+        try writer.writeAll(",\"messages\":[");
 
         var message_count: usize = 0;
         if (request.system_prompt) |system_prompt| {
-            try appendMessage(allocator, &payload, &message_count, "system", system_prompt, null);
+            try appendMessage(writer, &message_count, "system", system_prompt, null);
         }
 
         for (request.messages) |message| {
             try appendMessage(
-                allocator,
-                &payload,
+                writer,
                 &message_count,
                 message.role.asString(),
                 message.content,
@@ -40,33 +40,32 @@ pub const OpenAIProvider = struct {
             );
         }
 
-        try payload.appendSlice(allocator, "],\"temperature\":");
-        try std.json.stringify(request.temperature, .{}, payload.writer(allocator));
-        try payload.appendSlice(allocator, "}");
+        try writer.writeAll("],\"temperature\":");
+        try std.json.Stringify.value(request.temperature, .{}, writer);
+        try writer.writeByte('}');
 
-        return payload.toOwnedSlice(allocator);
+        return output.toOwnedSlice();
     }
 
     fn appendMessage(
-        allocator: std.mem.Allocator,
-        payload: *std.ArrayList(u8),
+        writer: *std.Io.Writer,
         message_count: *usize,
         role: []const u8,
         content: []const u8,
         tool_call_id: ?[]const u8,
     ) !void {
-        if (message_count.* > 0) try payload.appendSlice(allocator, ",");
+        if (message_count.* > 0) try writer.writeByte(',');
         message_count.* += 1;
 
-        try payload.appendSlice(allocator, "{\"role\":");
-        try std.json.stringify(role, .{}, payload.writer(allocator));
-        try payload.appendSlice(allocator, ",\"content\":");
-        try std.json.stringify(content, .{}, payload.writer(allocator));
+        try writer.writeAll("{\"role\":");
+        try std.json.Stringify.value(role, .{}, writer);
+        try writer.writeAll(",\"content\":");
+        try std.json.Stringify.value(content, .{}, writer);
         if (tool_call_id) |id| {
-            try payload.appendSlice(allocator, ",\"tool_call_id\":");
-            try std.json.stringify(id, .{}, payload.writer(allocator));
+            try writer.writeAll(",\"tool_call_id\":");
+            try std.json.Stringify.value(id, .{}, writer);
         }
-        try payload.appendSlice(allocator, "}");
+        try writer.writeByte('}');
     }
 
     pub fn send(self: OpenAIProvider, allocator: std.mem.Allocator, io: std.Io, request: CompletionRequest) !CompletionResponse {
