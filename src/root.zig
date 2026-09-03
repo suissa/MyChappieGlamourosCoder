@@ -24,6 +24,8 @@ pub const llm = struct {
     pub const provider = @import("llm/provider.zig");
     pub const mock = @import("llm/mock.zig");
     pub const http_transport = @import("llm/http_transport.zig");
+    pub const runtime_provider = @import("llm/runtime_provider.zig");
+    pub const RuntimeProvider = runtime_provider.RuntimeProvider;
     pub const gemini = @import("llm/gemini.zig");
     pub const openai = @import("llm/openai.zig");
     pub const anthropic = @import("llm/anthropic.zig");
@@ -66,6 +68,7 @@ test {
     _ = @import("llm/provider.zig");
     _ = @import("llm/mock.zig");
     _ = @import("llm/http_transport.zig");
+    _ = @import("llm/runtime_provider.zig");
     _ = @import("llm/gemini.zig");
     _ = @import("llm/openai.zig");
     _ = @import("llm/anthropic.zig");
