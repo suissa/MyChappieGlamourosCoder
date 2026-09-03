@@ -15,26 +15,27 @@ pub const AnthropicProvider = struct {
     }
 
     pub fn buildPayload(allocator: std.mem.Allocator, request: CompletionRequest) ![]u8 {
-        var payload: std.ArrayList(u8) = .empty;
-        errdefer payload.deinit(allocator);
+        var output: std.Io.Writer.Allocating = .init(allocator);
+        errdefer output.deinit();
+        const writer = &output.writer;
 
-        try payload.appendSlice(allocator, "{\"model\":");
-        try std.json.stringify(request.model, .{}, payload.writer(allocator));
-        try payload.appendSlice(allocator, ",\"max_tokens\":4096");
+        try writer.writeAll("{\"model\":");
+        try std.json.Stringify.value(request.model, .{}, writer);
+        try writer.writeAll(",\"max_tokens\":4096");
 
         if (request.system_prompt) |system_prompt| {
-            try payload.appendSlice(allocator, ",\"system\":");
-            try std.json.stringify(system_prompt, .{}, payload.writer(allocator));
+            try writer.writeAll(",\"system\":");
+            try std.json.Stringify.value(system_prompt, .{}, writer);
         }
 
-        try payload.appendSlice(allocator, ",\"temperature\":");
-        try std.json.stringify(request.temperature, .{}, payload.writer(allocator));
-        try payload.appendSlice(allocator, ",\"messages\":[");
+        try writer.writeAll(",\"temperature\":");
+        try std.json.Stringify.value(request.temperature, .{}, writer);
+        try writer.writeAll(",\"messages\":[");
 
         var message_count: usize = 0;
         for (request.messages) |message| {
             if (message.role == .system) continue;
-            if (message_count > 0) try payload.appendSlice(allocator, ",");
+            if (message_count > 0) try writer.writeByte(',');
             message_count += 1;
 
             const role = switch (message.role) {
@@ -42,15 +43,15 @@ pub const AnthropicProvider = struct {
                 .user, .tool => "user",
                 .system => unreachable,
             };
-            try payload.appendSlice(allocator, "{\"role\":");
-            try std.json.stringify(role, .{}, payload.writer(allocator));
-            try payload.appendSlice(allocator, ",\"content\":");
-            try std.json.stringify(message.content, .{}, payload.writer(allocator));
-            try payload.appendSlice(allocator, "}");
+            try writer.writeAll("{\"role\":");
+            try std.json.Stringify.value(role, .{}, writer);
+            try writer.writeAll(",\"content\":");
+            try std.json.Stringify.value(message.content, .{}, writer);
+            try writer.writeByte('}');
         }
 
-        try payload.appendSlice(allocator, "]}");
-        return payload.toOwnedSlice(allocator);
+        try writer.writeAll("]}");
+        return output.toOwnedSlice();
     }
 
     pub fn send(self: AnthropicProvider, allocator: std.mem.Allocator, io: std.Io, request: CompletionRequest) !CompletionResponse {
