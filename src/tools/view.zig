@@ -43,7 +43,6 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
     var lines_shown: usize = 0;
 
     while (lines.next()) |raw_line| {
-        // Strip trailing \r if present
         const line = if (raw_line.len > 0 and raw_line[raw_line.len - 1] == '\r')
             raw_line[0 .. raw_line.len - 1]
         else
@@ -72,7 +71,7 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
 pub const tool_def = Tool{
     .name = "view",
     .description = "Read the contents of a file with line numbers and optional line range (start_line, end_line).",
-    .parameters_json = 
+    .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
@@ -88,9 +87,7 @@ pub const tool_def = Tool{
 
 test "view tool execution" {
     const allocator = std.testing.allocator;
-    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .{ .block = .global } });
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const cwd = std.Io.Dir.cwd();
     try cwd.writeFile(io, .{ .sub_path = "test_view_file.txt", .data = "line 1\nline 2\nline 3\n" });
