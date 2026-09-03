@@ -49,9 +49,6 @@ pub const ToolRegistry = struct {
 
     pub fn execute(self: ToolRegistry, allocator: std.mem.Allocator, io: std.Io, name: []const u8, args_json: []const u8) !ToolResult {
         if (self.get(name)) |t| {
-            // File-oriented tools are deliberately scoped to relative paths.
-            // The CLI starts in the selected workspace; rejecting absolute and
-            // parent-traversal paths prevents an LLM tool call from escaping it.
             if (hasWorkspaceEscape(allocator, name, args_json)) {
                 return ToolResult{
                     .success = false,
@@ -90,10 +87,16 @@ fn hasWorkspaceEscape(allocator: std.mem.Allocator, tool_name: []const u8, args_
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, args_json, .{}) catch return false;
     defer parsed.deinit();
 
-    if (parsed.value != .object) return false;
-    const value = parsed.value.object.get(path_key) orelse return false;
-    if (value != .string) return false;
-    return isEscapingPath(value.string);
+    const object = switch (parsed.value) {
+        .object => |obj| obj,
+        else => return false,
+    };
+    const value = object.get(path_key) orelse return false;
+    const path = switch (value) {
+        .string => |text| text,
+        else => return false,
+    };
+    return isEscapingPath(path);
 }
 
 fn isEscapingPath(path: []const u8) bool {
