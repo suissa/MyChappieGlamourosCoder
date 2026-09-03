@@ -1,7 +1,7 @@
 name: build
 on:
   push:
-    branches: [main]
+    branches: [main, zig-0.16-port]
   pull_request:
 
 permissions:
@@ -12,7 +12,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  zig:
+    name: Zig 0.16 / ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - run: zig build
+      - run: zig build test
+      - run: zig build test-integration
+
+  legacy-go:
+    name: Legacy Go / ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
