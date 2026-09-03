@@ -50,7 +50,7 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
 pub const tool_def = Tool{
     .name = "write",
     .description = "Create or overwrite a file with the specified content. Parent directories are created automatically.",
-    .parameters_json = 
+    .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
@@ -65,9 +65,7 @@ pub const tool_def = Tool{
 
 test "write tool execution" {
     const allocator = std.testing.allocator;
-    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .{ .block = .global } });
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const test_path = "temp_test_dir/nested/test_write.txt";
     const cwd = std.Io.Dir.cwd();
