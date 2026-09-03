@@ -23,7 +23,7 @@ pub fn postJson(
     allocator: std.mem.Allocator,
     io: std.Io,
     url: []const u8,
-    body: []const u8,
+    body: []u8,
     extra_headers: []const std.http.Header,
     privileged_headers: []const std.http.Header,
 ) !Response {
