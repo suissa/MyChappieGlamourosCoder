@@ -58,9 +58,11 @@ pub fn executeWithStore(store: *TodoStore, allocator: std.mem.Allocator, io: std
         };
 
         const id = store.next_id;
+        const task_copy = try allocator.dupe(u8, task);
+        errdefer allocator.free(task_copy);
         try store.items.append(allocator, .{
             .id = id,
-            .task = try allocator.dupe(u8, task),
+            .task = task_copy,
             .done = false,
         });
         store.next_id += 1;
