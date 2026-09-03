@@ -15,10 +15,8 @@ pub const MockProvider = struct {
         _ = io;
         self.step_count += 1;
 
-        // Inspect the latest message
         const last_msg = if (request.messages.len > 0) request.messages[request.messages.len - 1] else null;
 
-        // If the previous turn was a tool response, finish the task
         if (last_msg != null and last_msg.?.role == .tool) {
             const final_text = try std.fmt.allocPrint(
                 allocator,
@@ -32,7 +30,21 @@ pub const MockProvider = struct {
             };
         }
 
-        // If prompt asks to create/write a file, emit a tool call to 'write'
+        // Dedicated dangerous-tool path used by permission-gate regressions.
+        if (last_msg != null and std.mem.indexOf(u8, last_msg.?.content, "execute bash") != null) {
+            var calls = try allocator.alloc(ToolCall, 1);
+            calls[0] = ToolCall{
+                .id = try allocator.dupe(u8, "call_mock_bash_01"),
+                .name = try allocator.dupe(u8, "bash"),
+                .arguments_json = try allocator.dupe(u8, "{\"command\":\"echo permission_gate_bypass > permission_gate_probe.txt\"}"),
+            };
+            return CompletionResponse{
+                .content = try allocator.dupe(u8, "Vou executar a ferramenta 'bash'."),
+                .tool_calls = calls,
+                .tokens_used = 80,
+            };
+        }
+
         if (last_msg != null and (std.mem.indexOf(u8, last_msg.?.content, "Crie") != null or
             std.mem.indexOf(u8, last_msg.?.content, "write") != null or
             std.mem.indexOf(u8, last_msg.?.content, "teste.txt") != null))
@@ -50,7 +62,6 @@ pub const MockProvider = struct {
             };
         }
 
-        // Default direct response
         const resp = try std.fmt.allocPrint(
             allocator,
             "Olá! Sou o MyChappie Glamouros Coder, assistente inteligente autônomo nativo em Zig v0.16.\nRecebi sua mensagem: \"{s}\"",
@@ -83,7 +94,6 @@ test "mock provider step progression" {
     try std.testing.expect(resp1.tool_calls != null);
     try std.testing.expectEqualStrings("write", resp1.tool_calls.?[0].name);
 
-    // Follow up with tool message
     const tool_msg = [_]prov.ChatMessage{
         .{ .role = .user, .content = "Crie um arquivo teste.txt" },
         .{ .role = .tool, .content = "Successfully wrote 50 bytes", .tool_call_id = "call_mock_write_01" },
@@ -97,4 +107,23 @@ test "mock provider step progression" {
 
     try std.testing.expect(resp2.tool_calls == null);
     try std.testing.expect(resp2.content != null);
+}
+
+test "mock provider can request bash for permission regression" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+
+    var mock = MockProvider.init();
+    const user_msg = [_]prov.ChatMessage{
+        .{ .role = .user, .content = "execute bash for permission regression" },
+    };
+
+    var response = try mock.send(allocator, io, .{
+        .messages = &user_msg,
+        .model = "mock-model",
+    });
+    defer response.deinit(allocator);
+
+    try std.testing.expect(response.tool_calls != null);
+    try std.testing.expectEqualStrings("bash", response.tool_calls.?[0].name);
 }
