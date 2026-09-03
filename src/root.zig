@@ -22,6 +22,8 @@ pub const tools = struct {
 
 pub const llm = struct {
     pub const provider = @import("llm/provider.zig");
+    pub const client = @import("llm/client.zig");
+    pub const Client = client.Client;
     pub const mock = @import("llm/mock.zig");
     pub const gemini = @import("llm/gemini.zig");
     pub const openai = @import("llm/openai.zig");
@@ -63,6 +65,7 @@ test {
     _ = @import("tools/question.zig");
     _ = @import("tools/registry.zig");
     _ = @import("llm/provider.zig");
+    _ = @import("llm/client.zig");
     _ = @import("llm/mock.zig");
     _ = @import("agent/session.zig");
     _ = @import("agent/prompts.zig");
