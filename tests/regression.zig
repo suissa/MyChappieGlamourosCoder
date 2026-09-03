@@ -9,6 +9,66 @@ test "config remains deterministic when process environment is not injected" {
     try std.testing.expect(cfg.api_key == null);
 }
 
+test "configured OpenAI provider is selected without opening a network connection" {
+    const allocator = std.testing.allocator;
+    const cfg = mychappie.AppConfig{
+        .provider_type = .openai,
+        .model = "gpt-test",
+        .api_key = "fake-test-key",
+        .base_url = "http://127.0.0.1:1/v1",
+        .workspace_root = ".",
+    };
+
+    var agent = try mychappie.agent.CoderAgent.initWithConfig(allocator, cfg, .{});
+    defer agent.deinit(allocator);
+
+    try std.testing.expectEqual(mychappie.llm.provider.ProviderType.openai, agent.providerType());
+    try std.testing.expectEqualStrings("gpt-test", agent.options.model);
+
+    switch (agent.llm) {
+        .openai => |provider| {
+            try std.testing.expectEqualStrings("fake-test-key", provider.api_key);
+            try std.testing.expectEqualStrings("http://127.0.0.1:1/v1", provider.base_url);
+        },
+        else => return error.UnexpectedProvider,
+    }
+}
+
+test "configured cloud provider fails closed without credential" {
+    const allocator = std.testing.allocator;
+    const cfg = mychappie.AppConfig{
+        .provider_type = .openai,
+        .model = "gpt-test",
+        .api_key = null,
+        .workspace_root = ".",
+    };
+
+    try std.testing.expectError(
+        error.MissingApiKey,
+        mychappie.agent.CoderAgent.initWithConfig(allocator, cfg, .{}),
+    );
+}
+
+test "configured mock provider dispatches through runtime union" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const cfg = mychappie.AppConfig{
+        .provider_type = .mock,
+        .model = "mock-chappie-v1",
+        .workspace_root = ".",
+    };
+
+    var agent = try mychappie.agent.CoderAgent.initWithConfig(allocator, cfg, .{ .max_steps = 3 });
+    defer agent.deinit(allocator);
+
+    const output = try agent.executeTurn(allocator, io, "Explique seu estado sem executar ferramentas.");
+    defer allocator.free(output);
+
+    try std.testing.expect(output.len > 0);
+    try std.testing.expectEqual(mychappie.llm.provider.ProviderType.mock, agent.providerType());
+    try std.testing.expectEqual(@as(?usize, 1), agent.llm.mockStepCount());
+}
+
 test "unknown tools fail closed" {
     const allocator = std.testing.allocator;
     var registry = mychappie.tools.ToolRegistry.init();

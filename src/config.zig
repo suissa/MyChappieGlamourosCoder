@@ -19,9 +19,8 @@ pub const AppConfig = struct {
         };
 
         const cwd = std.Io.Dir.cwd();
-        // Check for AGENTS.md
-        if (cwd.openFile(io, "AGENTS.md", .{})) |f| {
-            f.close(io);
+        if (cwd.openFile(io, "AGENTS.md", .{})) |file| {
+            file.close(io);
             cfg.has_agents_md = true;
         } else |_| {}
 
@@ -36,10 +35,21 @@ pub const AppConfig = struct {
                 cfg.provider_type = .openai;
                 cfg.model = "gpt-4o";
                 cfg.api_key = key;
+                cfg.base_url = env.get("OPENAI_BASE_URL");
             } else if (env.get("ANTHROPIC_API_KEY")) |key| {
                 cfg.provider_type = .anthropic;
                 cfg.model = "claude-3-5-sonnet-20241022";
                 cfg.api_key = key;
+            } else if (env.get("OLLAMA_HOST")) |host| {
+                cfg.provider_type = .ollama;
+                cfg.model = env.get("OLLAMA_MODEL") orelse "qwen2.5-coder:7b";
+                cfg.base_url = host;
+            }
+
+            // One provider-neutral override makes model selection declarative
+            // without changing source code.
+            if (env.get("MYCHAPPIE_MODEL")) |model| {
+                cfg.model = model;
             }
         }
 
@@ -51,4 +61,5 @@ test "config loader without process environment" {
     const cfg = AppConfig.load(std.testing.io, ".", null);
     try std.testing.expect(cfg.workspace_root.len > 0);
     try std.testing.expectEqual(prov.ProviderType.mock, cfg.provider_type);
+    try std.testing.expectEqualStrings("mock-chappie-v1", cfg.model);
 }
