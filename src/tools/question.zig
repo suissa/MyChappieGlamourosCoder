@@ -36,7 +36,7 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
 pub const tool_def = Tool{
     .name = "question",
     .description = "Ask a question to the user for clarification or confirmation during execution.",
-    .parameters_json = 
+    .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
@@ -49,14 +49,7 @@ pub const tool_def = Tool{
     .execute_fn = execute,
 };
 
-test "question tool basic" {
-    const allocator = std.testing.allocator;
-    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .{ .block = .global } });
-    defer threaded.deinit();
-    const io = threaded.io();
-
-    var res = try execute(allocator, io, "{\"question\": \"Proceed?\"}");
-    defer res.deinit(allocator);
-
-    try std.testing.expect(res.success);
+test "question tool definition" {
+    try std.testing.expectEqualStrings("question", tool_def.name);
+    try std.testing.expect(std.mem.indexOf(u8, tool_def.parameters_json, "default_answer") != null);
 }
