@@ -1,103 +1,155 @@
-# ⚡ MyChappie Glamouros Coder (Zig v0.16)
+# MyChappie Glamouros Coder — Zig 0.16
 
-<p align="center">
-  <b>Assistente de Código Autônomo e Glamouroso para Terminal</b><br />
-  Desenvolvido nativamente em <b>Zig v0.16</b> para a arquitetura <b>Multi-Plane AllasCode</b> (Planes/Agents).
-</p>
+MyChappie Glamouros Coder is the Zig 0.16 coding-agent runtime being extracted from the original Crush fork for the AllasCode Agents plane. The active Zig implementation is intentionally explicit about I/O, environment, provider selection, permissions and tool boundaries.
 
----
+## Current runtime
 
-## 🌟 Destaques
+- Native Zig 0.16 package with `pub fn main(init: std.process.Init) !void`.
+- Explicit `init.gpa`, `init.io` and `init.environ_map`; no global process-environment lookup.
+- Runtime-selectable LLM provider: Mock, Gemini, OpenAI-compatible, Anthropic and Ollama.
+- Autonomous multi-step loop with assistant tool-call history, tool results and provider token accounting.
+- Deterministic Mock provider for tests and offline verification.
+- ANSI/TrueColor terminal presentation.
+- Workspace-local task planning persisted in `.mychappie/todos.ndjson` rather than mutable global memory.
 
-- **Puro Zig v0.16**: Compilação nativa com zero dependências externas pesadas (`CGO_ENABLED=0`, binário estático e ultrarrápido).
-- **Interface TUI Glamour**: Estilização TrueColor ANSI 24-bit com caixas arredondadas, badges de status, banners neon e renderização de diffs coloridos.
-- **Ciclo Autônomo SOTA-DD**: Intake da meta do desenvolvedor, raciocínio passo a passo, chamada e despacho recursivo de ferramentas e auto-recuperação de erros.
-- **Ferramentas Nativas de Código**:
-  - `view`: Leitura com paginação e numeração de linhas.
-  - `write`: Criação e sobrescrita segura com criação recursiva de diretórios.
-  - `edit`: Modificação cirúrgica por substituição exata com validação de unicidade.
-  - `bash`: Execução segura de comandos do sistema com captura de stdout e stderr.
-  - `grep`: Busca textual recursiva de alta velocidade em árvores de diretórios.
-  - `glob`: Descoberta e enumeração de arquivos por máscaras de padrão.
-  - `todos`: Planejamento e acompanhamento de tarefas para objetivos complexos.
-  - `question`: Interação interativa para tomada de decisões com o usuário.
-- **Multi-Provedor LLM**: Suporte nativo a Google Gemini, OpenAI/OpenRouter/DeepSeek, Anthropic Claude, Ollama local e Mock determinístico offline.
+## Tools
 
----
+| Tool | Purpose | Default permission |
+| --- | --- | --- |
+| `view` | Read a file with line numbers and optional range | safe |
+| `grep` | Recursively search text | safe |
+| `glob` | Discover files/directories | safe |
+| `todos` | Manage the workspace-local task plan | safe |
+| `question` | Request human/policy input; never auto-confirms | safe |
+| `write` | Create or replace files | cautious |
+| `edit` | Exact validated replacement | cautious |
+| `bash` | Execute a shell command | dangerous / denied |
 
-## 🚀 Como Compilar e Executar
+File-oriented calls reject absolute paths and parent traversal (`..`) before dispatch. `bash` is denied by default, limits stdout/stderr to 4 MiB each, supports a relative `cwd`, and has a 120 s default timeout with a 600 s maximum.
 
-### Pré-requisito
-- **Zig v0.16.0** instalado e acessível no seu `PATH`.
+`question` does not fabricate a human response. Without an explicitly supplied policy `default_answer`, it returns `Human input required`, allowing an external orchestration layer to suspend/resume the operation.
 
-### 1. Compilação
+## Build
+
+Requirement: Zig 0.16.0.
+
 ```bash
-# Na raiz de Planes/Agents/MyChappieGlamourosCoder
 zig build
 ```
-O binário será gerado em:
-`zig-out/bin/mychappie-coder.exe` (Windows) ou `zig-out/bin/mychappie-coder` (Linux/macOS).
 
-### 2. Executar a Suíte de Testes
+Artifacts are written to `zig-out/bin/`.
+
+## Validation
+
+Unit tests are deterministic and must not run the autonomous demo as a side effect.
+
 ```bash
 zig build test
+zig build test-regression
+zig build test-integration
+zig build test-smoke
+zig build check
 ```
-Executa todos os 20 testes unitários automatizados (TUI, Tools, Agent Loop, Session, Mock Provider e Permissões).
 
-### 3. Comandos do CLI
+`zig build check` aggregates the validation steps configured by `build.zig`.
+
+The GitHub workflow also targets Linux, macOS and Windows with Zig 0.16.0. A workflow result is the authoritative cross-platform validation; a source change should not be described as CI-green until GitHub Actions has actually produced successful check runs.
+
+## CLI
 
 ```bash
-# Ver informações de versão e runtime
-zig-out/bin/mychappie-coder version
-
-# Listar catálogo de ferramentas
-zig-out/bin/mychappie-coder tools
-
-# Listar provedores de LLM suportados
-zig-out/bin/mychappie-coder models
-
-# Diagnóstico do workspace e contexto
-zig-out/bin/mychappie-coder info
-
-# Executar um objetivo com o agente autônomo
-zig-out/bin/mychappie-coder run "Crie um arquivo teste.txt com conteúdo de demonstração"
+mychappie-coder version
+mychappie-coder tools
+mychappie-coder models
+mychappie-coder info
+mychappie-coder run "Inspect this project and explain the next implementation step"
 ```
 
----
+When the first argument is not a known command it is treated as the prompt.
 
-## 🏛️ Estrutura do Projeto
+## LLM configuration
 
+Provider discovery can use credentials automatically, but explicit selection is recommended for reproducible execution.
+
+```text
+MYCHAPPIE_PROVIDER=mock|gemini|openai|anthropic|ollama
+MYCHAPPIE_MODEL=<provider model id>
+MYCHAPPIE_BASE_URL=<OpenAI-compatible or Ollama base URL>
+MYCHAPPIE_MAX_STEPS=10
+MYCHAPPIE_DANGEROUSLY_SKIP_PERMISSIONS=false
+
+GEMINI_API_KEY=...
+OPENAI_API_KEY=...
+OPENAI_BASE_URL=...
+ANTHROPIC_API_KEY=...
+OLLAMA_HOST=http://127.0.0.1:11434
 ```
-build.zig.zon                          Manifesto de pacote Zig 0.16
-build.zig                              Script de build (módulo da biblioteca + binário CLI + testes)
+
+`MYCHAPPIE_DANGEROUSLY_SKIP_PERMISSIONS=true` is an explicit escape hatch and should only be used when unrestricted shell execution is intentional.
+
+### Provider semantics
+
+- OpenAI-compatible: Chat Completions-style messages and function tools.
+- Gemini: `generateContent` with function declarations/calls/responses.
+- Anthropic: Messages API with `tool_use` and `tool_result` blocks.
+- Ollama: `/api/chat` with native tool calling.
+- Mock: deterministic local responses for tests.
+
+Provider/model identifiers are configuration, not architecture. Override `MYCHAPPIE_MODEL` when a provider changes model availability.
+
+## Project structure
+
+```text
+build.zig
+build.zig.zon
 src/
-  main.zig                             CLI entrypoint e despachante de comandos
-  root.zig                             Módulo público da biblioteca 'mychappie_coder'
-  glamour.zig                          Motor de estilização visual TUI e ANSI Truecolor
-  config.zig                           Descoberta de contexto e variáveis de ambiente
+  main.zig
+  root.zig
+  glamour.zig
+  config.zig
   agent/
-    agent.zig                          Motor autônomo CoderAgent
-    coordinator.zig                    Especialização de papéis (Coder, Architect, Reviewer)
-    prompts.zig                        System prompts nativos
-    session.zig                        Histórico e estado da sessão
-  tools/
-    tool.zig                           Interface universal de ferramentas
-    view.zig, write.zig, edit.zig      Ferramentas de manipulação de código
-    bash.zig                           Ferramenta de terminal e processos
-    grep.zig, glob.zig                 Ferramentas de busca e navegação
-    todos.zig, question.zig            Ferramentas de planejamento e diálogo
-    registry.zig                       Registro e despacho central
+    agent.zig
+    coordinator.zig
+    prompts.zig
+    session.zig
   llm/
-    provider.zig                       Contratos abstratos de LLM
-    mock.zig                           Provedor mock determinístico para testes
-    gemini.zig, openai.zig             Clientes HTTP REST para nuvem
-    anthropic.zig, ollama.zig          Clientes HTTP REST para Claude e Ollama local
+    provider.zig
+    client.zig
+    http.zig
+    mock.zig
+    gemini.zig
+    openai.zig
+    anthropic.zig
+    ollama.zig
   permission/
-    permission.zig                     Motor de segurança e aprovação
-legacy_go/                             Arquivo histórico do código Go original
+    permission.zig
+  tools/
+    tool.zig
+    registry.zig
+    view.zig
+    write.zig
+    edit.zig
+    bash.zig
+    grep.zig
+    glob.zig
+    todos.zig
+    question.zig
+tests/
+legacy_go/
 ```
 
----
+`legacy_go/` preserves the previous Go implementation for migration/reference; the Zig runtime does not depend on it.
 
-## 📄 Licença
-Distribuído sob os termos da licença MIT. Parte do ecossistema AllasCode.
+## Windows terminal encoding
+
+The application emits UTF-8. If legacy Windows PowerShell renders Portuguese characters as mojibake, configure the terminal output encoding before launching the binary, for example:
+
+```powershell
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+```
+
+PowerShell 7 / Windows Terminal normally handle UTF-8 without this workaround.
+
+## License
+
+See `LICENSE.md` for the repository's license terms and upstream attribution.

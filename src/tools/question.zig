@@ -8,11 +8,15 @@ const QuestionArgs = struct {
     default_answer: ?[]const u8 = null,
 };
 
+/// The core agent is intentionally headless: it must never fabricate a human
+/// confirmation. A caller may provide an explicit default_answer when the
+/// answer is part of its own policy; otherwise the tool reports that human
+/// input is required so the orchestration layer can suspend/resume the turn.
 pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) !ToolResult {
     _ = io;
     var parsed = std.json.parseFromSlice(QuestionArgs, allocator, args_json, .{ .ignore_unknown_fields = true }) catch |err| {
         const msg = try std.fmt.allocPrint(allocator, "JSON parse error in question tool: {s}", .{@errorName(err)});
-        return ToolResult{
+        return .{
             .success = false,
             .output = try allocator.dupe(u8, ""),
             .error_message = msg,
@@ -20,28 +24,44 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
     };
     defer parsed.deinit();
 
-    const q = parsed.value.question;
-    const def = parsed.value.default_answer orelse "yes";
+    const question = parsed.value.question;
+    if (question.len == 0) {
+        return .{
+            .success = false,
+            .output = try allocator.dupe(u8, ""),
+            .error_message = try allocator.dupe(u8, "question cannot be empty"),
+        };
+    }
 
-    std.debug.print("\n\x1b[38;2;250;204;21m\x1b[1m[PERGUNTA DO AGENTE]\x1b[0m {s}\n", .{q});
-    std.debug.print("\x1b[38;2;148;163;184m(Auto-confirmado no modo não-interativo com: '{s}')\x1b[0m\n", .{def});
+    if (parsed.value.default_answer) |answer| {
+        const response = try std.fmt.allocPrint(
+            allocator,
+            "Policy-provided answer to '{s}': {s}",
+            .{ question, answer },
+        );
+        return .{ .success = true, .output = response };
+    }
 
-    const response_str = try std.fmt.allocPrint(allocator, "User confirmed: {s}", .{def});
-    return ToolResult{
-        .success = true,
-        .output = response_str,
+    return .{
+        .success = false,
+        .output = try allocator.dupe(u8, ""),
+        .error_message = try std.fmt.allocPrint(
+            allocator,
+            "Human input required: {s}",
+            .{question},
+        ),
     };
 }
 
 pub const tool_def = Tool{
     .name = "question",
-    .description = "Ask a question to the user for clarification or confirmation during execution.",
+    .description = "Request clarification or confirmation. Without an explicit policy-provided default_answer, execution fails closed with Human input required instead of auto-confirming.",
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
-    \\    "question": { "type": "string", "description": "The question to ask the user" },
-    \\    "default_answer": { "type": "string", "description": "Fallback answer for headless mode" }
+    \\    "question": { "type": "string", "description": "The question that requires human or policy input" },
+    \\    "default_answer": { "type": "string", "description": "Optional answer explicitly supplied by the caller's policy for headless execution" }
     \\  },
     \\  "required": ["question"]
     \\}
@@ -49,7 +69,25 @@ pub const tool_def = Tool{
     .execute_fn = execute,
 };
 
-test "question tool definition" {
-    try std.testing.expectEqualStrings("question", tool_def.name);
-    try std.testing.expect(std.mem.indexOf(u8, tool_def.parameters_json, "default_answer") != null);
+test "question tool fails closed without explicit answer" {
+    const allocator = std.testing.allocator;
+    var result = try execute(allocator, std.testing.io, "{\"question\":\"Proceed?\"}");
+    defer result.deinit(allocator);
+
+    try std.testing.expect(!result.success);
+    try std.testing.expect(result.error_message != null);
+    try std.testing.expect(std.mem.indexOf(u8, result.error_message.?, "Human input required") != null);
+}
+
+test "question tool accepts explicit policy answer" {
+    const allocator = std.testing.allocator;
+    var result = try execute(
+        allocator,
+        std.testing.io,
+        "{\"question\":\"Proceed?\",\"default_answer\":\"yes\"}",
+    );
+    defer result.deinit(allocator);
+
+    try std.testing.expect(result.success);
+    try std.testing.expect(std.mem.indexOf(u8, result.output, "yes") != null);
 }
