@@ -28,8 +28,8 @@ pub const AppConfig = struct {
 
         const env = environ_map orelse return cfg;
 
-        // Prefer an explicit provider selection. When absent, preserve the
-        // convenient credential-based discovery used by the first Zig port.
+        // Explicit selection wins. Otherwise credential discovery keeps the
+        // CLI convenient while preserving a deterministic Mock-only default.
         if (env.get("MYCHAPPIE_PROVIDER")) |provider_name| {
             if (parseProviderType(provider_name)) |provider_type| {
                 cfg.provider_type = provider_type;
@@ -91,9 +91,9 @@ pub fn parseProviderType(value: []const u8) ?prov.ProviderType {
 fn defaultModel(provider_type: prov.ProviderType) []const u8 {
     return switch (provider_type) {
         .mock => "mock-chappie-v1",
-        .gemini => "gemini-2.5-flash",
-        .openai => "gpt-4o",
-        .anthropic => "claude-3-5-sonnet-20241022",
+        .gemini => "gemini-3.8-flash",
+        .openai => "gpt-5.6",
+        .anthropic => "claude-sonnet-5",
         .ollama => "qwen2.5-coder:7b",
     };
 }
