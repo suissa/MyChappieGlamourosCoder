@@ -2,30 +2,31 @@ name: nightly
 
 on:
   schedule:
-    - cron: "0 0 * * *" # every day at midnight
-  workflow_dispatch: # allows manual triggering
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  check:
+  zig-nightly:
+    name: Zig 0.16 / ${{ matrix.optimize }}
     runs-on: ubuntu-latest
-    outputs:
-      should_run: ${{ steps.check.outputs.should_run }}
+    strategy:
+      fail-fast: false
+      matrix:
+        optimize: [ReleaseSafe, ReleaseFast]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 1
-      - id: check
-        env:
-          GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
-        run: |
-          if gh run list --workflow nightly.yml -c $(git rev-parse HEAD) -s success | grep 'completed'; then
-            echo "should_run=false" >> $GITHUB_OUTPUT
-          else
-            echo "should_run=true" >> $GITHUB_OUTPUT
-          fi
-  nightly:
-    needs: check
-    if: needs.check.outputs.should_run == 'true'
-    uses: charmbracelet/meta/.github/workflows/nightly.yml@main
-    secrets:
-      goreleaser_key: ${{ secrets.GORELEASER_KEY }}
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - run: zig fmt --check build.zig src tests
+      - run: zig build -Doptimize=${{ matrix.optimize }}
+      - run: zig build check -Doptimize=${{ matrix.optimize }}
