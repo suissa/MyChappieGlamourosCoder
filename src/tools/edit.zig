@@ -45,7 +45,6 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
     };
     defer allocator.free(content);
 
-    // Count occurrences of old_str
     var count: usize = 0;
     var search_idx: usize = 0;
     while (search_idx <= content.len) {
@@ -75,7 +74,6 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
         };
     }
 
-    // Perform replacement
     var new_content_list: std.ArrayList(u8) = .empty;
     defer new_content_list.deinit(allocator);
 
@@ -121,7 +119,7 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
 pub const tool_def = Tool{
     .name = "edit",
     .description = "Surgically edit a file by finding old_string and replacing it with new_string. old_string must match uniquely unless allow_multiple is true.",
-    .parameters_json = 
+    .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
@@ -138,9 +136,7 @@ pub const tool_def = Tool{
 
 test "edit tool single replacement" {
     const allocator = std.testing.allocator;
-    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .{ .block = .global } });
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     const test_path = "test_edit_file.txt";
     const cwd = std.Io.Dir.cwd();
