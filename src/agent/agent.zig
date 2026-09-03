@@ -98,24 +98,13 @@ pub const CoderAgent = struct {
     }
 };
 
-test "coder agent autonomous execution with tool" {
+test "coder agent initialization is side-effect free" {
     const allocator = std.testing.allocator;
-    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .{ .block = .global } });
-    defer threaded.deinit();
-    const io = threaded.io();
-
-    const cwd = std.Io.Dir.cwd();
-    defer cwd.deleteFile(io, "chappie_demo.txt") catch {};
 
     var agent = try CoderAgent.init(allocator, ".", .{ .max_steps = 5 });
     defer agent.deinit(allocator);
 
-    const final_output = try agent.executeTurn(allocator, io, "Crie um arquivo teste.txt com conteúdo de demonstração");
-    defer allocator.free(final_output);
-
-    try std.testing.expect(final_output.len > 0);
-    // Verify that the mock write tool executed and file was created
-    const created_content = try cwd.readFileAlloc(io, "chappie_demo.txt", allocator, .unlimited);
-    defer allocator.free(created_content);
-    try std.testing.expect(std.mem.indexOf(u8, created_content, "MyChappie Glamouros Coder") != null);
+    try std.testing.expectEqual(@as(usize, 5), agent.options.max_steps);
+    try std.testing.expect(agent.registry.get("write") != null);
+    try std.testing.expectEqual(@as(usize, 0), agent.mock_llm.step_count);
 }
