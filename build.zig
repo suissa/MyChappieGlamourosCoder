@@ -99,9 +99,9 @@ pub fn build(b: *std.Build) void {
     smoke_step.dependOn(&smoke_models.step);
     smoke_step.dependOn(&smoke_info.step);
 
-    const check_step = b.step("check", "Run all deterministic validation suites");
-    check_step.dependOn(&test_step.step);
-    check_step.dependOn(&regression_step.step);
-    check_step.dependOn(&integration_step.step);
-    check_step.dependOn(&smoke_step.step);
+    const check_step = b.step("check", "Run all validation suites");
+    check_step.dependOn(test_step);
+    check_step.dependOn(regression_step);
+    check_step.dependOn(integration_step);
+    check_step.dependOn(smoke_step);
 }
