@@ -4,8 +4,13 @@ const tool_mod = @import("tool.zig");
 pub const Tool = tool_mod.Tool;
 pub const ToolResult = tool_mod.ToolResult;
 
+const default_timeout_ms: u64 = 120_000;
+const max_timeout_ms: u64 = 600_000;
+const output_limit_bytes: usize = 4 * 1024 * 1024;
+
 const BashArgs = struct {
     command: []const u8,
+    timeout_ms: ?u64 = null,
     cwd: ?[]const u8 = null,
 };
 
@@ -25,6 +30,19 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
         };
     }
 
+    const requested_timeout = parsed.value.timeout_ms orelse default_timeout_ms;
+    if (requested_timeout == 0 or requested_timeout > max_timeout_ms) {
+        return .{
+            .success = false,
+            .output = try allocator.dupe(u8, ""),
+            .error_message = try std.fmt.allocPrint(
+                allocator,
+                "timeout_ms must be between 1 and {d}",
+                .{max_timeout_ms},
+            ),
+        };
+    }
+
     var argv_buf: [3][]const u8 = undefined;
     const argv: []const []const u8 = if (builtin.os.tag == .windows) blk: {
         argv_buf = .{ "cmd.exe", "/c", command };
@@ -38,10 +56,16 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
         .argv = argv,
         .cwd = if (parsed.value.cwd) |path| .{ .path = path } else .{ .inherit = {} },
         .reserve_amount = 4096,
-        .stdout_limit = .limited(4 * 1024 * 1024),
-        .stderr_limit = .limited(4 * 1024 * 1024),
+        .stdout_limit = .limited(output_limit_bytes),
+        .stderr_limit = .limited(output_limit_bytes),
+        .timeout = .{
+            .duration = .{
+                .raw = .fromMilliseconds(@intCast(requested_timeout)),
+                .clock = .awake,
+            },
+        },
     }) catch |err| {
-        const msg = try std.fmt.allocPrint(allocator, "Failed to spawn child process for command '{s}': {s}", .{ command, @errorName(err) });
+        const msg = try std.fmt.allocPrint(allocator, "Failed to execute command '{s}': {s}", .{ command, @errorName(err) });
         return .{ .success = false, .output = try allocator.dupe(u8, ""), .error_message = msg };
     };
     defer allocator.free(run_result.stdout);
@@ -79,12 +103,13 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
 
 pub const tool_def = Tool{
     .name = "bash",
-    .description = "Execute a shell command inside the current workspace and return bounded stdout/stderr. This tool is classified as dangerous and denied by default.",
+    .description = "Execute a shell command inside the current workspace with bounded output and timeout. Classified as dangerous and denied by default.",
     .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
     \\    "command": { "type": "string", "description": "The command line string to execute" },
+    \\    "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 600000, "description": "Optional timeout in milliseconds; defaults to 120000" },
     \\    "cwd": { "type": "string", "description": "Optional relative working directory inside the workspace" }
     \\  },
     \\  "required": ["command"]
@@ -93,7 +118,8 @@ pub const tool_def = Tool{
     .execute_fn = execute,
 };
 
-test "bash tool definition stays dangerous and bounded" {
+test "bash tool declares timeout and workspace cwd" {
     try std.testing.expectEqualStrings("bash", tool_def.name);
-    try std.testing.expect(std.mem.indexOf(u8, tool_def.parameters_json, "timeout_ms") == null);
+    try std.testing.expect(std.mem.indexOf(u8, tool_def.parameters_json, "timeout_ms") != null);
+    try std.testing.expect(std.mem.indexOf(u8, tool_def.parameters_json, "cwd") != null);
 }
