@@ -89,7 +89,10 @@ pub const GeminiProvider = struct {
 
         for (parts.array.items) |part| {
             if (part.object.get("text")) |value| {
-                if (value == .string) try text.appendSlice(allocator, value.string);
+                switch (value) {
+                    .string => |string_value| try text.appendSlice(allocator, string_value),
+                    else => {},
+                }
             }
         }
 
