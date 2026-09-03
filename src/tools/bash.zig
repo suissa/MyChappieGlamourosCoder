@@ -89,7 +89,7 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
 pub const tool_def = Tool{
     .name = "bash",
     .description = "Execute a command in the shell and return its combined stdout and stderr.",
-    .parameters_json = 
+    .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
@@ -104,9 +104,7 @@ pub const tool_def = Tool{
 
 test "bash tool echo" {
     const allocator = std.testing.allocator;
-    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .{ .block = .global } });
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var res = try execute(allocator, io, "{\"command\": \"echo chappie_test_ok\"}");
     defer res.deinit(allocator);
