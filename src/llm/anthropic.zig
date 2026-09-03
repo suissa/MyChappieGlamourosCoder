@@ -1,8 +1,11 @@
 const std = @import("std");
 const prov = @import("provider.zig");
+const transport = @import("http_transport.zig");
 pub const CompletionRequest = prov.CompletionRequest;
 pub const CompletionResponse = prov.CompletionResponse;
 pub const ToolCall = prov.ToolCall;
+
+pub const anthropic_version = "2023-06-01";
 
 pub const AnthropicProvider = struct {
     api_key: []const u8,
@@ -11,75 +14,147 @@ pub const AnthropicProvider = struct {
         return .{ .api_key = api_key };
     }
 
+    pub fn buildPayload(allocator: std.mem.Allocator, request: CompletionRequest) ![]u8 {
+        var output: std.Io.Writer.Allocating = .init(allocator);
+        errdefer output.deinit();
+        const writer = &output.writer;
+
+        try writer.writeAll("{\"model\":");
+        try std.json.Stringify.value(request.model, .{}, writer);
+        try writer.writeAll(",\"max_tokens\":4096");
+
+        if (request.system_prompt) |system_prompt| {
+            try writer.writeAll(",\"system\":");
+            try std.json.Stringify.value(system_prompt, .{}, writer);
+        }
+
+        try writer.writeAll(",\"temperature\":");
+        try std.json.Stringify.value(request.temperature, .{}, writer);
+        try writer.writeAll(",\"messages\":[");
+
+        var message_count: usize = 0;
+        for (request.messages) |message| {
+            if (message.role == .system) continue;
+            if (message_count > 0) try writer.writeByte(',');
+            message_count += 1;
+
+            const role = switch (message.role) {
+                .assistant => "assistant",
+                .user, .tool => "user",
+                .system => unreachable,
+            };
+            try writer.writeAll("{\"role\":");
+            try std.json.Stringify.value(role, .{}, writer);
+            try writer.writeAll(",\"content\":");
+            try std.json.Stringify.value(message.content, .{}, writer);
+            try writer.writeByte('}');
+        }
+
+        try writer.writeAll("]}");
+        return output.toOwnedSlice();
+    }
+
     pub fn send(self: AnthropicProvider, allocator: std.mem.Allocator, io: std.Io, request: CompletionRequest) !CompletionResponse {
-        if (self.api_key.len == 0) {
-            return error.MissingApiKey;
-        }
+        if (self.api_key.len == 0) return error.MissingApiKey;
 
-        var client: std.http.Client = .{
-            .allocator = allocator,
-            .io = io,
+        const payload = try buildPayload(allocator, request);
+        defer allocator.free(payload);
+
+        const extra_headers = [_]std.http.Header{
+            .{ .name = "anthropic-version", .value = anthropic_version },
         };
-        defer client.deinit();
+        const privileged_headers = [_]std.http.Header{
+            .{ .name = "x-api-key", .value = self.api_key },
+        };
 
-        const endpoint = "https://api.anthropic.com/v1/messages";
-        const uri = try std.Uri.parse(endpoint);
+        var http_response = try transport.postJson(
+            allocator,
+            io,
+            "https://api.anthropic.com/v1/messages",
+            payload,
+            &extra_headers,
+            &privileged_headers,
+        );
+        defer http_response.deinit(allocator);
 
-        var payload_buf: std.ArrayList(u8) = .empty;
-        defer payload_buf.deinit(allocator);
+        if (http_response.status != .ok) return error.HttpError;
 
-        try payload_buf.appendSlice(allocator, "{\"model\":");
-        try std.json.stringify(request.model, .{}, payload_buf.writer(allocator));
-        try payload_buf.appendSlice(allocator, ",\"max_tokens\":4096,\"messages\":[");
-
-        var msg_count: usize = 0;
-        for (request.messages) |msg| {
-            if (msg.role == .system) continue; // Anthropic takes system prompt as top-level field
-            if (msg_count > 0) try payload_buf.appendSlice(allocator, ",");
-            try payload_buf.appendSlice(allocator, "{\"role\":\"");
-            try payload_buf.appendSlice(allocator, msg.role.asString());
-            try payload_buf.appendSlice(allocator, "\",\"content\":");
-            try std.json.stringify(msg.content, .{}, payload_buf.writer(allocator));
-            try payload_buf.appendSlice(allocator, "}");
-            msg_count += 1;
-        }
-        try payload_buf.appendSlice(allocator, "]}");
-
-        var header_buffer: [4096]u8 = undefined;
-        var req = try client.open(.POST, uri, .{
-            .server_header_buffer = &header_buffer,
-            .headers = .{
-                .content_type = .{ .override = "application/json" },
-            },
-        });
-        defer req.deinit();
-
-        req.transfer_encoding = .{ .content_length = payload_buf.items.len };
-        try req.send();
-        try req.writeAll(payload_buf.items);
-        try req.finish();
-        try req.wait();
-
-        if (req.response.status != .ok) {
-            return error.HttpError;
-        }
-
-        const body = try req.reader().readAllAlloc(allocator, 1024 * 1024);
-        defer allocator.free(body);
-
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, http_response.body, .{});
         defer parsed.deinit();
 
         const content_array = parsed.value.object.get("content") orelse return error.InvalidResponse;
         if (content_array.array.items.len == 0) return error.EmptyContent;
 
-        const first_block = content_array.array.items[0];
-        const text_val = first_block.object.get("text") orelse return error.InvalidResponse;
+        var text: std.ArrayList(u8) = .empty;
+        errdefer text.deinit(allocator);
+        for (content_array.array.items) |block| {
+            const text_value = block.object.get("text") orelse continue;
+            switch (text_value) {
+                .string => |value| try text.appendSlice(allocator, value),
+                else => {},
+            }
+        }
+        if (text.items.len == 0) return error.InvalidResponse;
 
-        return CompletionResponse{
-            .content = try allocator.dupe(u8, text_val.string),
+        var tokens_used: ?usize = null;
+        if (parsed.value.object.get("usage")) |usage| {
+            const input_tokens = jsonInteger(usage.object.get("input_tokens"));
+            const output_tokens = jsonInteger(usage.object.get("output_tokens"));
+            if (input_tokens != null or output_tokens != null) {
+                tokens_used = (input_tokens orelse 0) + (output_tokens orelse 0);
+            }
+        }
+
+        return .{
+            .content = try text.toOwnedSlice(allocator),
             .tool_calls = null,
-            .tokens_used = 200,
+            .tokens_used = tokens_used,
         };
     }
 };
+
+fn jsonInteger(value: ?std.json.Value) ?usize {
+    const actual = value orelse return null;
+    return switch (actual) {
+        .integer => |number| if (number >= 0) @intCast(number) else null,
+        else => null,
+    };
+}
+
+test "Anthropic payload carries system prompt at top level" {
+    const allocator = std.testing.allocator;
+    const messages = [_]prov.ChatMessage{
+        .{ .role = .system, .content = "legacy system message is skipped" },
+        .{ .role = .user, .content = "hello" },
+        .{ .role = .assistant, .content = "hi" },
+    };
+
+    const payload = try AnthropicProvider.buildPayload(allocator, .{
+        .messages = &messages,
+        .system_prompt = "system rules",
+        .model = "claude-test",
+    });
+    defer allocator.free(payload);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, payload, .{});
+    defer parsed.deinit();
+
+    const object = parsed.value.object;
+    try std.testing.expectEqualStrings("system rules", object.get("system").?.string);
+    const messages_json = object.get("messages").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), messages_json.len);
+    try std.testing.expectEqualStrings("user", messages_json[0].object.get("role").?.string);
+    try std.testing.expectEqualStrings("assistant", messages_json[1].object.get("role").?.string);
+}
+
+test "Anthropic provider rejects empty API key before network access" {
+    const provider = AnthropicProvider.init("");
+    try std.testing.expectError(error.MissingApiKey, provider.send(std.testing.allocator, std.testing.io, .{
+        .messages = &.{},
+        .model = "claude-test",
+    }));
+}
+
+test "Anthropic API version is pinned" {
+    try std.testing.expectEqualStrings("2023-06-01", anthropic_version);
+}

@@ -1,5 +1,6 @@
 const std = @import("std");
 const prov = @import("provider.zig");
+const transport = @import("http_transport.zig");
 pub const CompletionRequest = prov.CompletionRequest;
 pub const CompletionResponse = prov.CompletionResponse;
 pub const ToolCall = prov.ToolCall;
@@ -13,67 +14,118 @@ pub const OllamaProvider = struct {
         };
     }
 
-    pub fn send(self: OllamaProvider, allocator: std.mem.Allocator, io: std.Io, request: CompletionRequest) !CompletionResponse {
-        var client: std.http.Client = .{
-            .allocator = allocator,
-            .io = io,
-        };
-        defer client.deinit();
+    pub fn buildPayload(allocator: std.mem.Allocator, request: CompletionRequest) ![]u8 {
+        var output: std.Io.Writer.Allocating = .init(allocator);
+        errdefer output.deinit();
+        const writer = &output.writer;
 
+        try writer.writeAll("{\"model\":");
+        try std.json.Stringify.value(request.model, .{}, writer);
+        try writer.writeAll(",\"stream\":false,\"messages\":[");
+
+        var message_count: usize = 0;
+        if (request.system_prompt) |system_prompt| {
+            try appendMessage(writer, &message_count, "system", system_prompt);
+        }
+        for (request.messages) |message| {
+            try appendMessage(writer, &message_count, message.role.asString(), message.content);
+        }
+
+        try writer.writeAll("],\"options\":{\"temperature\":");
+        try std.json.Stringify.value(request.temperature, .{}, writer);
+        try writer.writeAll("}}");
+
+        return output.toOwnedSlice();
+    }
+
+    fn appendMessage(
+        writer: *std.Io.Writer,
+        message_count: *usize,
+        role: []const u8,
+        content: []const u8,
+    ) !void {
+        if (message_count.* > 0) try writer.writeByte(',');
+        message_count.* += 1;
+
+        try writer.writeAll("{\"role\":");
+        try std.json.Stringify.value(role, .{}, writer);
+        try writer.writeAll(",\"content\":");
+        try std.json.Stringify.value(content, .{}, writer);
+        try writer.writeByte('}');
+    }
+
+    pub fn send(self: OllamaProvider, allocator: std.mem.Allocator, io: std.Io, request: CompletionRequest) !CompletionResponse {
         const endpoint = try std.fmt.allocPrint(allocator, "{s}/api/chat", .{self.host});
         defer allocator.free(endpoint);
 
-        const uri = try std.Uri.parse(endpoint);
+        const payload = try buildPayload(allocator, request);
+        defer allocator.free(payload);
 
-        var payload_buf: std.ArrayList(u8) = .empty;
-        defer payload_buf.deinit(allocator);
+        var http_response = try transport.postJson(
+            allocator,
+            io,
+            endpoint,
+            payload,
+            &.{},
+            &.{},
+        );
+        defer http_response.deinit(allocator);
 
-        try payload_buf.appendSlice(allocator, "{\"model\":");
-        try std.json.stringify(request.model, .{}, payload_buf.writer(allocator));
-        try payload_buf.appendSlice(allocator, ",\"stream\":false,\"messages\":[");
+        if (http_response.status != .ok) return error.HttpError;
 
-        for (request.messages, 0..) |msg, idx| {
-            if (idx > 0) try payload_buf.appendSlice(allocator, ",");
-            try payload_buf.appendSlice(allocator, "{\"role\":\"");
-            try payload_buf.appendSlice(allocator, msg.role.asString());
-            try payload_buf.appendSlice(allocator, "\",\"content\":");
-            try std.json.stringify(msg.content, .{}, payload_buf.writer(allocator));
-            try payload_buf.appendSlice(allocator, "}");
-        }
-        try payload_buf.appendSlice(allocator, "]}");
-
-        var header_buffer: [4096]u8 = undefined;
-        var req = try client.open(.POST, uri, .{
-            .server_header_buffer = &header_buffer,
-            .headers = .{
-                .content_type = .{ .override = "application/json" },
-            },
-        });
-        defer req.deinit();
-
-        req.transfer_encoding = .{ .content_length = payload_buf.items.len };
-        try req.send();
-        try req.writeAll(payload_buf.items);
-        try req.finish();
-        try req.wait();
-
-        if (req.response.status != .ok) {
-            return error.HttpError;
-        }
-
-        const body = try req.reader().readAllAlloc(allocator, 1024 * 1024);
-        defer allocator.free(body);
-
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, http_response.body, .{});
         defer parsed.deinit();
 
         const message_obj = parsed.value.object.get("message") orelse return error.InvalidResponse;
-        const content_val = message_obj.object.get("content") orelse return error.InvalidResponse;
+        const content_value = message_obj.object.get("content") orelse return error.InvalidResponse;
+        const content = switch (content_value) {
+            .string => |value| value,
+            else => return error.InvalidResponse,
+        };
 
-        return CompletionResponse{
-            .content = try allocator.dupe(u8, content_val.string),
+        const prompt_tokens = jsonInteger(parsed.value.object.get("prompt_eval_count"));
+        const output_tokens = jsonInteger(parsed.value.object.get("eval_count"));
+        const tokens_used: ?usize = if (prompt_tokens != null or output_tokens != null)
+            (prompt_tokens orelse 0) + (output_tokens orelse 0)
+        else
+            null;
+
+        return .{
+            .content = try allocator.dupe(u8, content),
             .tool_calls = null,
-            .tokens_used = 120,
+            .tokens_used = tokens_used,
         };
     }
 };
+
+fn jsonInteger(value: ?std.json.Value) ?usize {
+    const actual = value orelse return null;
+    return switch (actual) {
+        .integer => |number| if (number >= 0) @intCast(number) else null,
+        else => null,
+    };
+}
+
+test "Ollama payload includes explicit system message and disables streaming" {
+    const allocator = std.testing.allocator;
+    const messages = [_]prov.ChatMessage{
+        .{ .role = .user, .content = "hello" },
+    };
+
+    const payload = try OllamaProvider.buildPayload(allocator, .{
+        .messages = &messages,
+        .system_prompt = "system rules",
+        .model = "qwen-test",
+    });
+    defer allocator.free(payload);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, payload, .{});
+    defer parsed.deinit();
+
+    const object = parsed.value.object;
+    try std.testing.expect(!object.get("stream").?.bool);
+    const messages_json = object.get("messages").?.array.items;
+    try std.testing.expectEqual(@as(usize, 2), messages_json.len);
+    try std.testing.expectEqualStrings("system", messages_json[0].object.get("role").?.string);
+    try std.testing.expectEqualStrings("system rules", messages_json[0].object.get("content").?.string);
+}

@@ -1,5 +1,6 @@
 const std = @import("std");
 const prov = @import("provider.zig");
+const transport = @import("http_transport.zig");
 pub const CompletionRequest = prov.CompletionRequest;
 pub const CompletionResponse = prov.CompletionResponse;
 pub const ToolCall = prov.ToolCall;
@@ -15,66 +16,87 @@ pub const OpenAIProvider = struct {
         };
     }
 
-    pub fn send(self: OpenAIProvider, allocator: std.mem.Allocator, io: std.Io, request: CompletionRequest) !CompletionResponse {
-        if (self.api_key.len == 0) {
-            return error.MissingApiKey;
+    pub fn buildPayload(allocator: std.mem.Allocator, request: CompletionRequest) ![]u8 {
+        var output: std.Io.Writer.Allocating = .init(allocator);
+        errdefer output.deinit();
+        const writer = &output.writer;
+
+        try writer.writeAll("{\"model\":");
+        try std.json.Stringify.value(request.model, .{}, writer);
+        try writer.writeAll(",\"messages\":[");
+
+        var message_count: usize = 0;
+        if (request.system_prompt) |system_prompt| {
+            try appendMessage(writer, &message_count, "system", system_prompt, null);
         }
 
-        var client: std.http.Client = .{
-            .allocator = allocator,
-            .io = io,
-        };
-        defer client.deinit();
+        for (request.messages) |message| {
+            try appendMessage(
+                writer,
+                &message_count,
+                message.role.asString(),
+                message.content,
+                message.tool_call_id,
+            );
+        }
+
+        try writer.writeAll("],\"temperature\":");
+        try std.json.Stringify.value(request.temperature, .{}, writer);
+        try writer.writeByte('}');
+
+        return output.toOwnedSlice();
+    }
+
+    fn appendMessage(
+        writer: *std.Io.Writer,
+        message_count: *usize,
+        role: []const u8,
+        content: []const u8,
+        tool_call_id: ?[]const u8,
+    ) !void {
+        if (message_count.* > 0) try writer.writeByte(',');
+        message_count.* += 1;
+
+        try writer.writeAll("{\"role\":");
+        try std.json.Stringify.value(role, .{}, writer);
+        try writer.writeAll(",\"content\":");
+        try std.json.Stringify.value(content, .{}, writer);
+        if (tool_call_id) |id| {
+            try writer.writeAll(",\"tool_call_id\":");
+            try std.json.Stringify.value(id, .{}, writer);
+        }
+        try writer.writeByte('}');
+    }
+
+    pub fn send(self: OpenAIProvider, allocator: std.mem.Allocator, io: std.Io, request: CompletionRequest) !CompletionResponse {
+        if (self.api_key.len == 0) return error.MissingApiKey;
 
         const endpoint = try std.fmt.allocPrint(allocator, "{s}/chat/completions", .{self.base_url});
         defer allocator.free(endpoint);
 
-        const uri = try std.Uri.parse(endpoint);
+        const payload = try buildPayload(allocator, request);
+        defer allocator.free(payload);
 
-        var payload_buf: std.ArrayList(u8) = .empty;
-        defer payload_buf.deinit(allocator);
+        const authorization = try std.fmt.allocPrint(allocator, "Bearer {s}", .{self.api_key});
+        defer allocator.free(authorization);
 
-        try payload_buf.appendSlice(allocator, "{\"model\":");
-        try std.json.stringify(request.model, .{}, payload_buf.writer(allocator));
-        try payload_buf.appendSlice(allocator, ",\"messages\":[");
+        const privileged_headers = [_]std.http.Header{
+            .{ .name = "authorization", .value = authorization },
+        };
 
-        for (request.messages, 0..) |msg, idx| {
-            if (idx > 0) try payload_buf.appendSlice(allocator, ",");
-            try payload_buf.appendSlice(allocator, "{\"role\":\"");
-            try payload_buf.appendSlice(allocator, msg.role.asString());
-            try payload_buf.appendSlice(allocator, "\",\"content\":");
-            try std.json.stringify(msg.content, .{}, payload_buf.writer(allocator));
-            try payload_buf.appendSlice(allocator, "}");
-        }
-        try payload_buf.appendSlice(allocator, "]}");
+        var http_response = try transport.postJson(
+            allocator,
+            io,
+            endpoint,
+            payload,
+            &.{},
+            &privileged_headers,
+        );
+        defer http_response.deinit(allocator);
 
-        const auth_header = try std.fmt.allocPrint(allocator, "Bearer {s}", .{self.api_key});
-        defer allocator.free(auth_header);
+        if (http_response.status != .ok) return error.HttpError;
 
-        var header_buffer: [4096]u8 = undefined;
-        var req = try client.open(.POST, uri, .{
-            .server_header_buffer = &header_buffer,
-            .headers = .{
-                .content_type = .{ .override = "application/json" },
-                .authorization = .{ .override = auth_header },
-            },
-        });
-        defer req.deinit();
-
-        req.transfer_encoding = .{ .content_length = payload_buf.items.len };
-        try req.send();
-        try req.writeAll(payload_buf.items);
-        try req.finish();
-        try req.wait();
-
-        if (req.response.status != .ok) {
-            return error.HttpError;
-        }
-
-        const body = try req.reader().readAllAlloc(allocator, 1024 * 1024);
-        defer allocator.free(body);
-
-        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, body, .{});
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, http_response.body, .{});
         defer parsed.deinit();
 
         const choices = parsed.value.object.get("choices") orelse return error.InvalidResponse;
@@ -82,12 +104,49 @@ pub const OpenAIProvider = struct {
 
         const first_choice = choices.array.items[0];
         const message_obj = first_choice.object.get("message") orelse return error.InvalidResponse;
-        const content_val = message_obj.object.get("content") orelse return error.InvalidResponse;
+        const content_value = message_obj.object.get("content") orelse return error.InvalidResponse;
+        const content = switch (content_value) {
+            .string => |value| value,
+            else => return error.InvalidResponse,
+        };
 
-        return CompletionResponse{
-            .content = try allocator.dupe(u8, content_val.string),
+        return .{
+            .content = try allocator.dupe(u8, content),
             .tool_calls = null,
             .tokens_used = 150,
         };
     }
 };
+
+test "OpenAI payload includes system prompt and tool correlation id" {
+    const allocator = std.testing.allocator;
+    const messages = [_]prov.ChatMessage{
+        .{ .role = .user, .content = "hello" },
+        .{ .role = .tool, .content = "done", .tool_call_id = "call-1" },
+    };
+
+    const payload = try OpenAIProvider.buildPayload(allocator, .{
+        .messages = &messages,
+        .system_prompt = "system rules",
+        .model = "gpt-test",
+    });
+    defer allocator.free(payload);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, payload, .{});
+    defer parsed.deinit();
+
+    const object = parsed.value.object;
+    try std.testing.expectEqualStrings("gpt-test", object.get("model").?.string);
+    const messages_json = object.get("messages").?.array.items;
+    try std.testing.expectEqual(@as(usize, 3), messages_json.len);
+    try std.testing.expectEqualStrings("system", messages_json[0].object.get("role").?.string);
+    try std.testing.expectEqualStrings("call-1", messages_json[2].object.get("tool_call_id").?.string);
+}
+
+test "OpenAI provider rejects empty API key before network access" {
+    const provider = OpenAIProvider.init("", null);
+    try std.testing.expectError(error.MissingApiKey, provider.send(std.testing.allocator, std.testing.io, .{
+        .messages = &.{},
+        .model = "gpt-test",
+    }));
+}
