@@ -50,26 +50,15 @@ pub const ChatMessage = struct {
         const content = try allocator.dupe(u8, self.content);
         errdefer allocator.free(content);
 
-        var cloned_calls: ?[]ToolCall = null;
-        if (self.tool_calls) |calls| {
-            const owned_calls = try allocator.alloc(ToolCall, calls.len);
-            var initialized: usize = 0;
-            errdefer {
-                for (owned_calls[0..initialized]) |*call| call.deinit(allocator);
-                allocator.free(owned_calls);
-            }
-            for (calls, 0..) |call, index| {
-                owned_calls[index] = try call.clone(allocator);
-                initialized += 1;
-            }
-            cloned_calls = owned_calls;
-        }
-        errdefer if (cloned_calls) |calls| {
-            for (calls) |*call| call.deinit(allocator);
-            allocator.free(calls);
-        };
+        const cloned_calls: ?[]ToolCall = if (self.tool_calls) |calls|
+            try cloneToolCalls(allocator, calls)
+        else
+            null;
+        errdefer deinitToolCalls(allocator, cloned_calls);
 
         const tool_call_id = if (self.tool_call_id) |id| try allocator.dupe(u8, id) else null;
+        errdefer if (tool_call_id) |id| allocator.free(id);
+
         return .{
             .role = self.role,
             .content = content,
@@ -80,14 +69,33 @@ pub const ChatMessage = struct {
 
     pub fn deinit(self: *ChatMessage, allocator: std.mem.Allocator) void {
         allocator.free(self.content);
-        if (self.tool_calls) |calls| {
-            for (calls) |*call| call.deinit(allocator);
-            allocator.free(calls);
-        }
+        deinitToolCalls(allocator, self.tool_calls);
         if (self.tool_call_id) |id| allocator.free(id);
         self.* = undefined;
     }
 };
+
+fn cloneToolCalls(allocator: std.mem.Allocator, calls: []const ToolCall) ![]ToolCall {
+    const owned_calls = try allocator.alloc(ToolCall, calls.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (owned_calls[0..initialized]) |*call| call.deinit(allocator);
+        allocator.free(owned_calls);
+    }
+
+    for (calls, 0..) |call, index| {
+        owned_calls[index] = try call.clone(allocator);
+        initialized += 1;
+    }
+    return owned_calls;
+}
+
+fn deinitToolCalls(allocator: std.mem.Allocator, maybe_calls: ?[]ToolCall) void {
+    if (maybe_calls) |calls| {
+        for (calls) |*call| call.deinit(allocator);
+        allocator.free(calls);
+    }
+}
 
 pub const CompletionRequest = struct {
     messages: []const ChatMessage,
@@ -104,10 +112,7 @@ pub const CompletionResponse = struct {
 
     pub fn deinit(self: *CompletionResponse, allocator: std.mem.Allocator) void {
         if (self.content) |content| allocator.free(content);
-        if (self.tool_calls) |calls| {
-            for (calls) |*call| call.deinit(allocator);
-            allocator.free(calls);
-        }
+        deinitToolCalls(allocator, self.tool_calls);
         self.* = undefined;
     }
 };
