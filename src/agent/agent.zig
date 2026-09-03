@@ -1,6 +1,7 @@
 const std = @import("std");
 const prov = @import("../llm/provider.zig");
-const mock_prov = @import("../llm/mock.zig");
+const runtime_prov = @import("../llm/runtime_provider.zig");
+const config_mod = @import("../config.zig");
 const session_mod = @import("session.zig");
 const coord_mod = @import("coordinator.zig");
 const reg_mod = @import("../tools/registry.zig");
@@ -18,17 +19,43 @@ pub const CoderAgent = struct {
     registry: reg_mod.ToolRegistry,
     permissions: perm_mod.PermissionManager,
     session: session_mod.Session,
-    mock_llm: mock_prov.MockProvider,
+    llm: runtime_prov.RuntimeProvider,
     options: AgentOptions,
 
     pub fn init(allocator: std.mem.Allocator, workspace_root: []const u8, options: AgentOptions) !CoderAgent {
+        const llm = try runtime_prov.RuntimeProvider.init(.mock, null, null);
+        return initWithRuntime(allocator, workspace_root, options, llm);
+    }
+
+    pub fn initWithConfig(
+        allocator: std.mem.Allocator,
+        app_config: config_mod.AppConfig,
+        options: AgentOptions,
+    ) !CoderAgent {
+        const llm = try runtime_prov.RuntimeProvider.init(
+            app_config.provider_type,
+            app_config.api_key,
+            app_config.base_url,
+        );
+
+        var configured_options = options;
+        configured_options.model = app_config.model;
+        return initWithRuntime(allocator, app_config.workspace_root, configured_options, llm);
+    }
+
+    fn initWithRuntime(
+        allocator: std.mem.Allocator,
+        workspace_root: []const u8,
+        options: AgentOptions,
+        llm: runtime_prov.RuntimeProvider,
+    ) !CoderAgent {
         const sess = try session_mod.Session.init(allocator, "chappie-session-current", workspace_root);
         return .{
             .coordinator = coord_mod.Coordinator.init(.coder),
             .registry = reg_mod.ToolRegistry.init(),
             .permissions = perm_mod.PermissionManager.init(options.dangerously_skip_permissions),
             .session = sess,
-            .mock_llm = mock_prov.MockProvider.init(),
+            .llm = llm,
             .options = options,
         };
     }
@@ -37,6 +64,10 @@ pub const CoderAgent = struct {
         self.registry.deinit(allocator);
         self.session.deinit(allocator);
         self.* = undefined;
+    }
+
+    pub fn providerType(self: *const CoderAgent) prov.ProviderType {
+        return self.llm.providerType();
     }
 
     pub fn executeTurn(self: *CoderAgent, allocator: std.mem.Allocator, io: std.Io, user_prompt: []const u8) ![]const u8 {
@@ -58,7 +89,7 @@ pub const CoderAgent = struct {
                 .model = self.options.model,
             };
 
-            var llm_response = try self.mock_llm.send(allocator, io, req);
+            var llm_response = try self.llm.send(allocator, io, req);
             defer llm_response.deinit(allocator);
 
             if (llm_response.content) |text| {
@@ -122,7 +153,24 @@ test "coder agent initialization is side-effect free and permissions are safe by
 
     try std.testing.expectEqual(@as(usize, 5), agent.options.max_steps);
     try std.testing.expect(agent.registry.get("write") != null);
-    try std.testing.expectEqual(@as(usize, 0), agent.mock_llm.step_count);
+    try std.testing.expectEqual(prov.ProviderType.mock, agent.providerType());
+    try std.testing.expectEqual(@as(?usize, 0), agent.llm.mockStepCount());
     try std.testing.expect(!agent.permissions.skip_all);
     try std.testing.expect(!agent.permissions.isAllowed("bash"));
+}
+
+test "coder agent can be configured for Ollama without cloud credentials" {
+    const allocator = std.testing.allocator;
+    const app_config = config_mod.AppConfig{
+        .provider_type = .ollama,
+        .model = "qwen-test",
+        .base_url = "http://127.0.0.1:11434",
+        .workspace_root = ".",
+    };
+
+    var agent = try CoderAgent.initWithConfig(allocator, app_config, .{});
+    defer agent.deinit(allocator);
+
+    try std.testing.expectEqual(prov.ProviderType.ollama, agent.providerType());
+    try std.testing.expectEqualStrings("qwen-test", agent.options.model);
 }
