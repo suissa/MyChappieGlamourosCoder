@@ -1,20 +1,22 @@
-# Binaries for programs and plugins
+# Native binaries and libraries
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
 *.out
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
+# Zig build outputs
+.zig-cache/
+zig-out/
+/bin/
+/dist/
 
-# Go workspace file
+# MyChappie workspace-local runtime state
+.mychappie/
+
+# Legacy Go workspace files kept only for migration/reference
 go.work
 go.work.sum
 
@@ -34,12 +36,6 @@ ehthumbs.db
 Thumbs.db
 *.log
 
-# Binary output directory
-/bin/
-/dist/
-.zig-cache/
-zig-out/
-
 # Local environment variables
 .env
 .env.local
@@ -47,8 +43,8 @@ zig-out/
 # Nix/direnv
 .direnv/
 
+# Upstream Crush local state
 **/.crush/**
-
 /crush
 /tmp/
 
