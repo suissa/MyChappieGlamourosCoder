@@ -34,6 +34,7 @@ pub const CoderAgent = struct {
     }
 
     pub fn deinit(self: *CoderAgent, allocator: std.mem.Allocator) void {
+        self.registry.deinit(allocator);
         self.session.deinit(allocator);
         self.* = undefined;
     }
