@@ -37,6 +37,8 @@ Thumbs.db
 # Binary output directory
 /bin/
 /dist/
+.zig-cache/
+zig-out/
 
 # Local environment variables
 .env

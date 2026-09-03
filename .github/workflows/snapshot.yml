@@ -2,8 +2,8 @@ name: snapshot
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,22 +13,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  snapshot:
-    runs-on:
-      # Use our own large runners with more CPU and RAM for faster builds
-      group: releasers
+  build-snapshot:
+    name: Snapshot / ${{ matrix.asset }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: linux
+          - os: macos-latest
+            asset: macos
+          - os: windows-latest
+            asset: windows
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: mlugg/setup-zig@v2
         with:
-          go-version-file: go.mod
-      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+          version: 0.16.0
+      - run: zig build -Doptimize=ReleaseSafe
+      - name: Prepare artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ -f zig-out/bin/mychappie-coder.exe ]; then
+            cp zig-out/bin/mychappie-coder.exe dist/mychappie-coder-${{ matrix.asset }}.exe
+          else
+            cp zig-out/bin/mychappie-coder dist/mychappie-coder-${{ matrix.asset }}
+          fi
+      - uses: actions/upload-artifact@v4
         with:
-          version: "nightly"
-          distribution: goreleaser-pro
-          args: build --snapshot --clean
-        env:
-          GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
+          name: mychappie-coder-${{ matrix.asset }}-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

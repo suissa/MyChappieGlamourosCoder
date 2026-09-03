@@ -1,13 +1,23 @@
 name: lint
+
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  lint:
-    uses: charmbracelet/meta/.github/workflows/lint.yml@main
-    with:
-      golangci_path: .golangci.yml
-      golangci_version: v2.13.1
-      timeout: 10m
+  zig-fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Check Zig formatting
+        run: zig fmt --check build.zig src tests
