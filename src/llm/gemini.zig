@@ -237,8 +237,10 @@ fn parseResponse(allocator: std.mem.Allocator, body: []const u8) !CompletionResp
             const function_value = part.get("functionCall") orelse continue;
             const function = asObject(function_value) orelse return error.InvalidResponse;
             const name = asString(function.get("name") orelse return error.InvalidResponse) orelse return error.InvalidResponse;
-            const args = function.get("args") orelse .{ .object = .empty };
-            const arguments_json = try stringifyValue(allocator, args);
+            const arguments_json = if (function.get("args")) |args|
+                try stringifyValue(allocator, args)
+            else
+                try allocator.dupe(u8, "{}");
             errdefer allocator.free(arguments_json);
 
             const id = if (function.get("id")) |id_value|
