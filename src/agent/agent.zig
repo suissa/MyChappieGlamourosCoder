@@ -57,7 +57,7 @@ pub const CoderAgent = struct {
         const sess = try session_mod.Session.init(allocator, "chappie-session-current", workspace_root);
         return .{
             .coordinator = coord_mod.Coordinator.init(.coder),
-            .registry = reg_mod.ToolRegistry.init(),
+            .registry = reg_mod.ToolRegistry.initWithWorkspace(workspace_root),
             .session = sess,
             .provider = provider,
             .permissions = perm_mod.PermissionManager.init(options.dangerously_skip_permissions),
@@ -104,6 +104,15 @@ pub const CoderAgent = struct {
 
             if (llm_response.tool_calls) |calls| {
                 if (calls.len > 0) {
+                    // Preserve the assistant turn that requested the tools. Cloud
+                    // APIs require this message before the corresponding tool
+                    // result messages on the next completion request.
+                    try self.session.addMessage(allocator, .{
+                        .role = .assistant,
+                        .content = llm_response.content orelse "",
+                        .tool_calls = calls,
+                    });
+
                     for (calls) |call| {
                         glamour.printToolCall(call.name, call.arguments_json);
 
