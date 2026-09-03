@@ -30,6 +30,36 @@ test "dangerous shell tool is denied by default" {
     try std.testing.expect(permissions.isAllowed("write"));
 }
 
+test "agent permission gate prevents requested bash execution by default" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    const probe_path = "permission_gate_probe.txt";
+
+    cwd.deleteFile(io, probe_path) catch {};
+    defer cwd.deleteFile(io, probe_path) catch {};
+
+    var agent = try mychappie.agent.CoderAgent.init(allocator, ".", .{ .max_steps = 3 });
+    defer agent.deinit(allocator);
+
+    try std.testing.expect(!agent.options.dangerously_skip_permissions);
+
+    const output = try agent.executeTurn(allocator, io, "execute bash for permission regression");
+    defer allocator.free(output);
+    try std.testing.expect(output.len > 0);
+
+    try std.testing.expectError(error.FileNotFound, cwd.openFile(io, probe_path, .{}));
+
+    var saw_denial = false;
+    for (agent.session.messages.items) |message| {
+        if (message.role == .tool and std.mem.indexOf(u8, message.content, "Permission denied") != null) {
+            saw_denial = true;
+            break;
+        }
+    }
+    try std.testing.expect(saw_denial);
+}
+
 test "direct agent response does not invoke filesystem write tool" {
     const allocator = std.testing.allocator;
     const io = std.testing.io;
