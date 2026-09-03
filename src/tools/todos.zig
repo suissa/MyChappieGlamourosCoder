@@ -33,7 +33,7 @@ var global_todos: std.ArrayList(TodoItem) = .empty;
 var global_next_id: usize = 1;
 
 const TodosArgs = struct {
-    action: []const u8, // "add", "complete", "list", "clear"
+    action: []const u8,
     task: ?[]const u8 = null,
     id: ?usize = null,
 };
@@ -51,7 +51,6 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
     defer parsed.deinit();
 
     const action = parsed.value.action;
-
     var out_list: std.ArrayList(u8) = .empty;
     defer out_list.deinit(allocator);
 
@@ -64,11 +63,7 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
             };
         };
         const task_copy = try allocator.dupe(u8, task_desc);
-        try global_todos.append(allocator, .{
-            .id = global_next_id,
-            .task = task_copy,
-            .done = false,
-        });
+        try global_todos.append(allocator, .{ .id = global_next_id, .task = task_copy, .done = false });
         const msg = try std.fmt.allocPrint(allocator, "Added task #{d}: {s}", .{ global_next_id, task_desc });
         defer allocator.free(msg);
         try out_list.appendSlice(allocator, msg);
@@ -94,20 +89,14 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
         }
         if (!found) {
             const msg = try std.fmt.allocPrint(allocator, "Task with ID #{d} not found", .{target_id});
-            return ToolResult{
-                .success = false,
-                .output = try allocator.dupe(u8, ""),
-                .error_message = msg,
-            };
+            return ToolResult{ .success = false, .output = try allocator.dupe(u8, ""), .error_message = msg };
         }
     } else if (std.mem.eql(u8, action, "clear")) {
-        for (global_todos.items) |item| {
-            allocator.free(item.task);
-        }
+        for (global_todos.items) |item| allocator.free(item.task);
         global_todos.deinit(allocator);
         global_todos = .empty;
         try out_list.appendSlice(allocator, "All tasks cleared.");
-    } else { // "list"
+    } else {
         if (global_todos.items.len == 0) {
             try out_list.appendSlice(allocator, "No tasks in the plan.");
         } else {
@@ -121,16 +110,13 @@ pub fn execute(allocator: std.mem.Allocator, io: std.Io, args_json: []const u8) 
         }
     }
 
-    return ToolResult{
-        .success = true,
-        .output = try out_list.toOwnedSlice(allocator),
-    };
+    return ToolResult{ .success = true, .output = try out_list.toOwnedSlice(allocator) };
 }
 
 pub const tool_def = Tool{
     .name = "todos",
     .description = "Manage autonomous agent task plan (actions: add, complete, list, clear).",
-    .parameters_json = 
+    .parameters_json =
     \\{
     \\  "type": "object",
     \\  "properties": {
@@ -146,9 +132,7 @@ pub const tool_def = Tool{
 
 test "todos tool lifecycle" {
     const allocator = std.testing.allocator;
-    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .{ .block = .global } });
-    defer threaded.deinit();
-    const io = threaded.io();
+    const io = std.testing.io;
 
     var res_add = try execute(allocator, io, "{\"action\": \"add\", \"task\": \"Build Zig 0.16 agent\"}");
     defer res_add.deinit(allocator);
