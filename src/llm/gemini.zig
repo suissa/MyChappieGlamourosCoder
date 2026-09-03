@@ -13,34 +13,35 @@ pub const GeminiProvider = struct {
     }
 
     pub fn buildPayload(allocator: std.mem.Allocator, request: CompletionRequest) ![]u8 {
-        var payload: std.ArrayList(u8) = .empty;
-        errdefer payload.deinit(allocator);
+        var output: std.Io.Writer.Allocating = .init(allocator);
+        errdefer output.deinit();
+        const writer = &output.writer;
 
-        try payload.appendSlice(allocator, "{");
+        try writer.writeByte('{');
         if (request.system_prompt) |system_prompt| {
-            try payload.appendSlice(allocator, "\"systemInstruction\":{\"parts\":[{\"text\":");
-            try std.json.stringify(system_prompt, .{}, payload.writer(allocator));
-            try payload.appendSlice(allocator, "}]},");
+            try writer.writeAll("\"systemInstruction\":{\"parts\":[{\"text\":");
+            try std.json.Stringify.value(system_prompt, .{}, writer);
+            try writer.writeAll("}]},");
         }
 
-        try payload.appendSlice(allocator, "\"contents\":[");
+        try writer.writeAll("\"contents\":[");
         for (request.messages, 0..) |message, index| {
-            if (index > 0) try payload.appendSlice(allocator, ",");
+            if (index > 0) try writer.writeByte(',');
             const role = switch (message.role) {
                 .assistant => "model",
                 .user, .system, .tool => "user",
             };
-            try payload.appendSlice(allocator, "{\"role\":");
-            try std.json.stringify(role, .{}, payload.writer(allocator));
-            try payload.appendSlice(allocator, ",\"parts\":[{\"text\":");
-            try std.json.stringify(message.content, .{}, payload.writer(allocator));
-            try payload.appendSlice(allocator, "}]}");
+            try writer.writeAll("{\"role\":");
+            try std.json.Stringify.value(role, .{}, writer);
+            try writer.writeAll(",\"parts\":[{\"text\":");
+            try std.json.Stringify.value(message.content, .{}, writer);
+            try writer.writeAll("}]}");
         }
-        try payload.appendSlice(allocator, "],\"generationConfig\":{\"temperature\":");
-        try std.json.stringify(request.temperature, .{}, payload.writer(allocator));
-        try payload.appendSlice(allocator, "}}");
+        try writer.writeAll("],\"generationConfig\":{\"temperature\":");
+        try std.json.Stringify.value(request.temperature, .{}, writer);
+        try writer.writeAll("}}");
 
-        return payload.toOwnedSlice(allocator);
+        return output.toOwnedSlice();
     }
 
     pub fn send(self: GeminiProvider, allocator: std.mem.Allocator, io: std.Io, request: CompletionRequest) !CompletionResponse {
