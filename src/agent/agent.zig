@@ -99,6 +99,16 @@ pub const CoderAgent = struct {
 
             if (llm_response.tool_calls) |calls| {
                 if (calls.len > 0) {
+                    // Tool protocols require the assistant's structured call to
+                    // precede the corresponding tool-result messages. Session
+                    // cloning owns a durable copy before the provider response
+                    // is deinitialized at the end of this loop iteration.
+                    try self.session.addMessage(allocator, .{
+                        .role = .assistant,
+                        .content = llm_response.content orelse "",
+                        .tool_calls = calls,
+                    });
+
                     for (calls) |call| {
                         glamour.printToolCall(call.name, call.arguments_json);
 
@@ -157,6 +167,28 @@ test "coder agent initialization is side-effect free and permissions are safe by
     try std.testing.expectEqual(@as(?usize, 0), agent.llm.mockStepCount());
     try std.testing.expect(!agent.permissions.skip_all);
     try std.testing.expect(!agent.permissions.isAllowed("bash"));
+}
+
+test "coder agent preserves assistant tool call before tool result" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    const cwd = std.Io.Dir.cwd();
+    defer cwd.deleteFile(io, "chappie_demo.txt") catch {};
+
+    var agent = try CoderAgent.init(allocator, ".", .{ .max_steps = 3 });
+    defer agent.deinit(allocator);
+
+    const output = try agent.executeTurn(allocator, io, "Crie um arquivo teste.txt");
+    defer allocator.free(output);
+
+    try std.testing.expect(agent.session.messages.items.len >= 4);
+    const assistant_call = agent.session.messages.items[1];
+    const tool_result = agent.session.messages.items[2];
+    try std.testing.expectEqual(prov.Role.assistant, assistant_call.role);
+    try std.testing.expect(assistant_call.tool_calls != null);
+    try std.testing.expectEqualStrings("write", assistant_call.tool_calls.?[0].name);
+    try std.testing.expectEqual(prov.Role.tool, tool_result.role);
+    try std.testing.expectEqualStrings(assistant_call.tool_calls.?[0].id, tool_result.tool_call_id.?);
 }
 
 test "coder agent can be configured for Ollama without cloud credentials" {
