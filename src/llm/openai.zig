@@ -105,11 +105,14 @@ pub const OpenAIProvider = struct {
 
         const first_choice = choices.array.items[0];
         const message_obj = first_choice.object.get("message") orelse return error.InvalidResponse;
-        const content_val = message_obj.object.get("content") orelse return error.InvalidResponse;
-        if (content_val != .string) return error.InvalidResponse;
+        const content_value = message_obj.object.get("content") orelse return error.InvalidResponse;
+        const content = switch (content_value) {
+            .string => |value| value,
+            else => return error.InvalidResponse,
+        };
 
         return .{
-            .content = try allocator.dupe(u8, content_val.string),
+            .content = try allocator.dupe(u8, content),
             .tool_calls = null,
             .tokens_used = 150,
         };
