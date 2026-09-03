@@ -20,7 +20,7 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("  {s}Version:{s}   0.1.0-alpha (Zig v0.16.0 Native)\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
         std.debug.print("  {s}Plane:{s}     Agents / Coder Plane\n", .{ Glamour.Theme.purple, Glamour.Theme.reset });
         std.debug.print("  {s}Engine:{s}    SOTA-DD Autonomous Loop with Multi-Tool Pipeline\n", .{ Glamour.Theme.green, Glamour.Theme.reset });
-        std.debug.print("  {s}Runtime:{s}   std.Io.Threaded High-Performance Event Loop\n\n", .{ Glamour.Theme.slate, Glamour.Theme.reset });
+        std.debug.print("  {s}Runtime:{s}   std.Io + runtime-dispatched LLM providers\n\n", .{ Glamour.Theme.slate, Glamour.Theme.reset });
         return;
     }
 
@@ -45,11 +45,12 @@ pub fn main(init: std.process.Init) !void {
     if (std.mem.eql(u8, command, "models")) {
         Glamour.printBanner();
         std.debug.print("{s}🧠 PROVEDORES DE LLM SUPORTADOS:{s}\n\n", .{ Glamour.Theme.purple, Glamour.Theme.reset });
-        std.debug.print("  • {s}Google Gemini{s}       (gemini-2.5-pro, gemini-2.5-flash via GEMINI_API_KEY)\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
-        std.debug.print("  • {s}OpenAI / Compatible{s}   (gpt-4o, openrouter, deepseek via OPENAI_API_KEY)\n", .{ Glamour.Theme.green, Glamour.Theme.reset });
-        std.debug.print("  • {s}Anthropic Claude{s}     (claude-3-5-sonnet via ANTHROPIC_API_KEY)\n", .{ Glamour.Theme.orange, Glamour.Theme.reset });
-        std.debug.print("  • {s}Ollama Local{s}         (offline inference via OLLAMA_HOST, default: localhost:11434)\n", .{ Glamour.Theme.slate, Glamour.Theme.reset });
-        std.debug.print("  • {s}Deterministic Mock{s}   (offline verification and testing)\n\n", .{ Glamour.Theme.yellow, Glamour.Theme.reset });
+        std.debug.print("  • {s}Google Gemini{s}         via GEMINI_API_KEY\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+        std.debug.print("  • {s}OpenAI / Compatible{s}   via OPENAI_API_KEY + OPENAI_BASE_URL opcional\n", .{ Glamour.Theme.green, Glamour.Theme.reset });
+        std.debug.print("  • {s}Anthropic Claude{s}      via ANTHROPIC_API_KEY\n", .{ Glamour.Theme.orange, Glamour.Theme.reset });
+        std.debug.print("  • {s}Ollama Local{s}          via OLLAMA_HOST + OLLAMA_MODEL opcional\n", .{ Glamour.Theme.slate, Glamour.Theme.reset });
+        std.debug.print("  • {s}Deterministic Mock{s}    fallback offline para testes\n\n", .{ Glamour.Theme.yellow, Glamour.Theme.reset });
+        std.debug.print("  MYCHAPPIE_MODEL sobrescreve o modelo detectado para qualquer provider.\n\n", .{});
         return;
     }
 
@@ -60,7 +61,11 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("  - Workspace:        {s}\n", .{app_cfg.workspace_root});
         std.debug.print("  - AGENTS.md:        {s}\n", .{if (app_cfg.has_agents_md) "Encontrado ✔" else "Não encontrado (usando padrão)"});
         std.debug.print("  - Active Provider:  {s}\n", .{@tagName(app_cfg.provider_type)});
-        std.debug.print("  - Active Model:     {s}\n\n", .{app_cfg.model});
+        std.debug.print("  - Active Model:     {s}\n", .{app_cfg.model});
+        if (app_cfg.base_url) |base_url| {
+            std.debug.print("  - Provider URL:     {s}\n", .{base_url});
+        }
+        std.debug.print("\n", .{});
         return;
     }
 
@@ -78,7 +83,8 @@ pub fn main(init: std.process.Init) !void {
             return;
         }
 
-        try runAgent(allocator, io, args[prompt_index], skip_permissions);
+        const app_cfg = mychappie.AppConfig.load(io, ".", init.environ_map);
+        try runAgent(allocator, io, app_cfg, args[prompt_index], skip_permissions);
         return;
     }
 
@@ -89,21 +95,33 @@ pub fn main(init: std.process.Init) !void {
     }
 
     // Direct prompts are safe by default. Dangerous tools require the explicit run flag.
-    try runAgent(allocator, io, command, false);
+    const app_cfg = mychappie.AppConfig.load(io, ".", init.environ_map);
+    try runAgent(allocator, io, app_cfg, command, false);
 }
 
-fn runAgent(allocator: std.mem.Allocator, io: std.Io, prompt: []const u8, skip_permissions: bool) !void {
+fn runAgent(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    app_cfg: mychappie.AppConfig,
+    prompt: []const u8,
+    skip_permissions: bool,
+) !void {
     Glamour.printBanner();
     std.debug.print("{s}🎯 OBJETIVO:{s} {s}\n", .{ Glamour.Theme.yellow, Glamour.Theme.reset, prompt });
+    std.debug.print("{s}🧠 PROVIDER:{s} {s} / {s}\n", .{
+        Glamour.Theme.purple,
+        Glamour.Theme.reset,
+        @tagName(app_cfg.provider_type),
+        app_cfg.model,
+    });
     std.debug.print("{s}🔐 PERMISSÕES:{s} {s}\n\n", .{
         Glamour.Theme.cyan,
         Glamour.Theme.reset,
         if (skip_permissions) "BYPASS EXPLÍCITO (dangerous tools habilitadas)" else "SAFE DEFAULT (dangerous tools bloqueadas)",
     });
 
-    var coder = try mychappie.agent.CoderAgent.init(allocator, ".", .{
+    var coder = try mychappie.agent.CoderAgent.initWithConfig(allocator, app_cfg, .{
         .max_steps = 10,
-        .model = "mock-chappie-v1",
         .dangerously_skip_permissions = skip_permissions,
     });
     defer coder.deinit(allocator);
@@ -120,11 +138,11 @@ fn printHelp() void {
     std.debug.print("{s}USO:{s}\n", .{ Glamour.Theme.bold, Glamour.Theme.reset });
     std.debug.print("  mychappie-coder <comando> [argumentos]\n\n", .{});
     std.debug.print("{s}COMANDOS:{s}\n", .{ Glamour.Theme.bold, Glamour.Theme.reset });
-    std.debug.print("  {s}run <prompt>{s}                              Executa o agente com permissões seguras\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+    std.debug.print("  {s}run <prompt>{s}                              Executa com provider detectado e permissões seguras\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
     std.debug.print("  {s}run --dangerously-skip-permissions <prompt>{s} Habilita explicitamente tools perigosas\n", .{ Glamour.Theme.red, Glamour.Theme.reset });
     std.debug.print("  {s}tools{s}                                     Exibe o catálogo de ferramentas disponíveis\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
-    std.debug.print("  {s}models{s}                                    Exibe a lista de modelos e provedores suportados\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
-    std.debug.print("  {s}info{s}                                      Exibe diagnóstico do workspace e contexto AllasCode\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+    std.debug.print("  {s}models{s}                                    Exibe providers e variáveis de configuração\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
+    std.debug.print("  {s}info{s}                                      Exibe provider/modelo realmente detectados\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
     std.debug.print("  {s}version{s}                                   Exibe informações de versão e compilação Zig v0.16\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
     std.debug.print("  {s}help{s}                                      Exibe esta mensagem de ajuda\n\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
 }
