@@ -54,6 +54,7 @@ pub const CoderAgent = struct {
         options: AgentOptions,
         provider: client_mod.Client,
     ) !CoderAgent {
+        if (options.max_steps == 0) return error.InvalidMaxSteps;
         const sess = try session_mod.Session.init(allocator, "chappie-session-current", workspace_root);
         return .{
             .coordinator = coord_mod.Coordinator.init(.coder),
@@ -79,9 +80,6 @@ pub const CoderAgent = struct {
         defer allocator.free(system_prompt);
 
         var current_step: usize = 0;
-        var last_response_text: ?[]const u8 = null;
-        errdefer if (last_response_text) |text| allocator.free(text);
-
         while (current_step < self.options.max_steps) : (current_step += 1) {
             const req = prov.CompletionRequest{
                 .messages = self.session.messages.items,
@@ -93,20 +91,12 @@ pub const CoderAgent = struct {
             var llm_response = try self.provider.send(allocator, io, req);
             defer llm_response.deinit(allocator);
 
-            if (llm_response.tokens_used) |tokens| {
-                self.session.tokens_total += tokens;
-            }
-
-            if (llm_response.content) |text| {
-                if (last_response_text) |prev| allocator.free(prev);
-                last_response_text = try allocator.dupe(u8, text);
-            }
+            if (llm_response.tokens_used) |tokens| self.session.tokens_total += tokens;
 
             if (llm_response.tool_calls) |calls| {
                 if (calls.len > 0) {
                     // Preserve the assistant turn that requested the tools. Cloud
-                    // APIs require this message before the corresponding tool
-                    // result messages on the next completion request.
+                    // APIs require it before the corresponding tool-result turns.
                     try self.session.addMessage(allocator, .{
                         .role = .assistant,
                         .content = llm_response.content orelse "",
@@ -150,13 +140,14 @@ pub const CoderAgent = struct {
                 }
             }
 
-            if (llm_response.content) |final_text| {
-                try self.session.addTurn(allocator, .assistant, final_text);
-            }
-            break;
+            const final_text = llm_response.content orelse return error.EmptyModelResponse;
+            if (final_text.len == 0) return error.EmptyModelResponse;
+
+            try self.session.addTurn(allocator, .assistant, final_text);
+            return allocator.dupe(u8, final_text);
         }
 
-        return last_response_text orelse try allocator.dupe(u8, "Tarefa concluída.");
+        return error.MaxStepsExceeded;
     }
 };
 
@@ -170,4 +161,11 @@ test "coder agent initialization is side-effect free and safe by default" {
     try std.testing.expect(agent.registry.get("write") != null);
     try std.testing.expectEqual(prov.ProviderType.mock, agent.provider.providerType());
     try std.testing.expect(!agent.permissions.isAllowed("bash"));
+}
+
+test "coder agent rejects a zero step budget" {
+    try std.testing.expectError(
+        error.InvalidMaxSteps,
+        CoderAgent.init(std.testing.allocator, ".", .{ .max_steps = 0 }),
+    );
 }
