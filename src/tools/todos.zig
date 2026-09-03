@@ -64,7 +64,10 @@ pub fn executeWithStore(store: *TodoStore, allocator: std.mem.Allocator, io: std
             .done = false,
         });
         store.next_id += 1;
-        try output.print(allocator, "Added task #{d}: {s}", .{ id, task });
+
+        const msg = try std.fmt.allocPrint(allocator, "Added task #{d}: {s}", .{ id, task });
+        defer allocator.free(msg);
+        try output.appendSlice(allocator, msg);
     } else if (std.mem.eql(u8, parsed.value.action, "complete")) {
         const target_id = parsed.value.id orelse return .{
             .success = false,
@@ -75,7 +78,9 @@ pub fn executeWithStore(store: *TodoStore, allocator: std.mem.Allocator, io: std
         for (store.items.items) |*item| {
             if (item.id == target_id) {
                 item.done = true;
-                try output.print(allocator, "Marked task #{d} as completed: {s}", .{ item.id, item.task });
+                const msg = try std.fmt.allocPrint(allocator, "Marked task #{d} as completed: {s}", .{ item.id, item.task });
+                defer allocator.free(msg);
+                try output.appendSlice(allocator, msg);
                 return .{ .success = true, .output = try output.toOwnedSlice(allocator) };
             }
         }
@@ -94,11 +99,13 @@ pub fn executeWithStore(store: *TodoStore, allocator: std.mem.Allocator, io: std
         } else {
             try output.appendSlice(allocator, "=== Current Task Plan ===\n");
             for (store.items.items) |item| {
-                try output.print(allocator, "{s} #{d}: {s}\n", .{
+                const line = try std.fmt.allocPrint(allocator, "{s} #{d}: {s}\n", .{
                     if (item.done) "[✔]" else "[ ]",
                     item.id,
                     item.task,
                 });
+                defer allocator.free(line);
+                try output.appendSlice(allocator, line);
             }
         }
     } else {
