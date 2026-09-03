@@ -9,7 +9,11 @@ pub const AppConfig = struct {
     workspace_root: []const u8 = ".",
     has_agents_md: bool = false,
 
-    pub fn load(allocator: std.mem.Allocator, io: std.Io, workspace_root: []const u8) AppConfig {
+    pub fn load(
+        io: std.Io,
+        workspace_root: []const u8,
+        environ_map: ?*const std.process.Environ.Map,
+    ) AppConfig {
         var cfg = AppConfig{
             .workspace_root = workspace_root,
         };
@@ -21,36 +25,30 @@ pub const AppConfig = struct {
             cfg.has_agents_md = true;
         } else |_| {}
 
-        // Check environment variables
-        if (std.process.Environ.createMap(.{ .block = .global }, allocator)) |env_map| {
-            var mut_env = env_map;
-            defer mut_env.deinit();
-
-            if (mut_env.get("GEMINI_API_KEY")) |key| {
+        // Zig 0.16 makes the process environment explicit. Production callers
+        // inject init.environ_map; tests and embedded users may omit it.
+        if (environ_map) |env| {
+            if (env.get("GEMINI_API_KEY")) |key| {
                 cfg.provider_type = .gemini;
                 cfg.model = "gemini-2.5-flash";
                 cfg.api_key = key;
-            } else if (mut_env.get("OPENAI_API_KEY")) |key| {
+            } else if (env.get("OPENAI_API_KEY")) |key| {
                 cfg.provider_type = .openai;
                 cfg.model = "gpt-4o";
                 cfg.api_key = key;
-            } else if (mut_env.get("ANTHROPIC_API_KEY")) |key| {
+            } else if (env.get("ANTHROPIC_API_KEY")) |key| {
                 cfg.provider_type = .anthropic;
                 cfg.model = "claude-3-5-sonnet-20241022";
                 cfg.api_key = key;
             }
-        } else |_| {}
+        }
 
         return cfg;
     }
 };
 
-test "config loader" {
-    const allocator = std.testing.allocator;
-    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .{ .block = .global } });
-    defer threaded.deinit();
-    const io = threaded.io();
-
-    const cfg = AppConfig.load(allocator, io, ".");
+test "config loader without process environment" {
+    const cfg = AppConfig.load(std.testing.io, ".", null);
     try std.testing.expect(cfg.workspace_root.len > 0);
+    try std.testing.expectEqual(prov.ProviderType.mock, cfg.provider_type);
 }
