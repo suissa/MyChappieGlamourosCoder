@@ -56,7 +56,7 @@ pub fn main(init: std.process.Init) !void {
 
     if (std.mem.eql(u8, command, "info")) {
         Glamour.printBanner();
-        const app_cfg = mychappie.AppConfig.load(allocator, io, ".");
+        const app_cfg = mychappie.AppConfig.load(io, ".", init.environ_map);
         std.debug.print("{s}📊 DIAGNÓSTICO DO AMBIENTE:{s}\n", .{ Glamour.Theme.cyan, Glamour.Theme.reset });
         std.debug.print("  - Workspace:        {s}\n", .{app_cfg.workspace_root});
         std.debug.print("  - AGENTS.md:        {s}\n", .{if (app_cfg.has_agents_md) "Encontrado ✔" else "Não encontrado (usando padrão)"});
